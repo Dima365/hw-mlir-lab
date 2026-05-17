@@ -1,0 +1,58 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# CMake / Ninja
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+.ninja_*
+ninja-*.log
+install_manifest.txt
+
+# Compilation database
+compile_commands.json
+
+# Object/library/binary outputs
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# LLVM / MLIR generated artifacts
+*.bc
+*.ll
+*.mlir.tmp
+*.mlir.out
+
+# Verilator
+obj_dir/
+sim_build/
+*.vcd
+*.fst
+*.gtkw
+coverage.dat
+results.xml
+
+# Cocotb / Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Logs
+*.log
+logs/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
