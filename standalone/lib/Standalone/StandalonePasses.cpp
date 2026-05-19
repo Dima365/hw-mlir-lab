@@ -13,11 +13,14 @@
 
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 
+#include "Standalone/StandaloneDialect.h"
+#include "Standalone/StandaloneOps.h"
 #include "Standalone/StandalonePasses.h"
 
 namespace mlir::standalone {
 #define GEN_PASS_DEF_STANDALONESWITCHBARFOO
 #define GEN_PASS_DEF_CONVERTLINALGMATMULTOSYSTOLIC
+#define GEN_PASS_DEF_LOWERSYSTOLICTOFUNCCALL
 #include "Standalone/StandalonePasses.h.inc"
 
 namespace {
@@ -95,6 +98,57 @@ public:
 
     RewritePatternSet patterns(&getContext());
     patterns.add<ConvertMatmulToSystolicPattern>(&getContext());
+
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
+class LowerSystolicMatmulToCall
+    : public OpRewritePattern<standalone::SystolicMatmulOp> {
+public:
+  using OpRewritePattern<standalone::SystolicMatmulOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(standalone::SystolicMatmulOp op,
+                                PatternRewriter &rewriter) const override {
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+
+    Value lhs = op.getLhs();
+    Value rhs = op.getRhs();
+    Value acc = op.getAcc();
+
+    auto fn = module.lookupSymbol<func::FuncOp>("systolic_matmul_8x8");
+    if (!fn) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(module.getBody());
+
+      auto fnType = rewriter.getFunctionType(
+          {lhs.getType(), rhs.getType(), acc.getType()}, {});
+
+      fn = func::FuncOp::create(
+          rewriter, op.getLoc(), "systolic_matmul_8x8", fnType);
+      fn.setPrivate();
+    }
+
+    rewriter.replaceOpWithNewOp<func::CallOp>(
+        op,
+        "systolic_matmul_8x8",
+        TypeRange{},
+        ValueRange{lhs, rhs, acc});
+
+    return success();
+  }
+};
+
+class LowerSystolicToFuncCall
+    : public impl::LowerSystolicToFuncCallBase<LowerSystolicToFuncCall> {
+public:
+  using impl::LowerSystolicToFuncCallBase<
+      LowerSystolicToFuncCall>::LowerSystolicToFuncCallBase;
+
+  void runOnOperation() final {
+    RewritePatternSet patterns(&getContext());
+    patterns.add<LowerSystolicMatmulToCall>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();

@@ -16,6 +16,14 @@ struct RequestHeader {
   uint32_t payload_bytes;
 };
 
+typedef struct {
+  float *allocated;
+  float *aligned;
+  int64_t offset;
+  int64_t sizes[2];
+  int64_t strides[2];
+} MemRef2DF32;
+
 static int systolic_fd = -1;
 
 static void die(const char *msg) {
@@ -77,7 +85,40 @@ static int get_connection(void) {
   return systolic_fd;
 }
 
-void systolic_matmul_8x8(float *a, float *b, float *c) {
+static void check_8x8_memref(const char *name, const MemRef2DF32 *memref) {
+  if (memref->sizes[0] != 8 || memref->sizes[1] != 8) {
+    fprintf(stderr, "systolic runtime: %s must be 8x8, got %ldx%ld\n", name,
+            (long)memref->sizes[0], (long)memref->sizes[1]);
+    abort();
+  }
+}
+
+static void pack_8x8(const MemRef2DF32 *src, float dst[64]) {
+  float *base = src->aligned + src->offset;
+  for (int64_t i = 0; i < 8; ++i)
+    for (int64_t j = 0; j < 8; ++j)
+      dst[i * 8 + j] = base[i * src->strides[0] + j * src->strides[1]];
+}
+
+static void unpack_8x8(const float src[64], MemRef2DF32 *dst) {
+  float *base = dst->aligned + dst->offset;
+  for (int64_t i = 0; i < 8; ++i)
+    for (int64_t j = 0; j < 8; ++j)
+      base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
+}
+
+void systolic_matmul_8x8(MemRef2DF32 *a, MemRef2DF32 *b, MemRef2DF32 *c) {
+  check_8x8_memref("lhs", a);
+  check_8x8_memref("rhs", b);
+  check_8x8_memref("acc", c);
+
+  float a_buf[64];
+  float b_buf[64];
+  float c_buf[64];
+  pack_8x8(a, a_buf);
+  pack_8x8(b, b_buf);
+  pack_8x8(c, c_buf);
+
   int fd = get_connection();
 
   struct RequestHeader header;
@@ -86,9 +127,10 @@ void systolic_matmul_8x8(float *a, float *b, float *c) {
   header.payload_bytes = 3u * 64u * sizeof(float);
 
   write_all(fd, &header, sizeof(header));
-  write_all(fd, a, 64u * sizeof(float));
-  write_all(fd, b, 64u * sizeof(float));
-  write_all(fd, c, 64u * sizeof(float));
+  write_all(fd, a_buf, sizeof(a_buf));
+  write_all(fd, b_buf, sizeof(b_buf));
+  write_all(fd, c_buf, sizeof(c_buf));
 
-  read_all(fd, c, 64u * sizeof(float));
+  read_all(fd, c_buf, sizeof(c_buf));
+  unpack_8x8(c_buf, c);
 }

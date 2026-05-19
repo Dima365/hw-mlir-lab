@@ -32,4 +32,17 @@ def ConvertLinalgMatmulToSystolic
   let summary = "Convert 8x8 linalg.matmul ops to standalone.systolic_matmul";
 }
 
+def LowerSystolicToFuncCall
+    : Pass<"lower-systolic-to-func-call", "mlir::ModuleOp"> {
+  let summary = "Lower standalone.systolic_matmul to simulator runtime call";
+  let description = [{
+    Replaces standalone.systolic_matmul memref operation with a func.call to
+    systolic_matmul_8x8 runtime function.
+  }];
+
+  let dependentDialects = [
+    "mlir::func::FuncDialect"
+  ];
+}
+
 #endif // STANDALONE_PASS
