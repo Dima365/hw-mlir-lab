@@ -107,17 +107,33 @@ static void unpack_8x8(const float src[64], MemRef2DF32 *dst) {
       base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
 }
 
-void systolic_matmul_8x8(MemRef2DF32 *a, MemRef2DF32 *b, MemRef2DF32 *c) {
-  check_8x8_memref("lhs", a);
-  check_8x8_memref("rhs", b);
-  check_8x8_memref("acc", c);
+void systolic_matmul_8x8(
+    float *a_allocated, float *a_aligned, int64_t a_offset, int64_t a_size0,
+    int64_t a_size1, int64_t a_stride0, int64_t a_stride1,
+    float *b_allocated, float *b_aligned, int64_t b_offset, int64_t b_size0,
+    int64_t b_size1, int64_t b_stride0, int64_t b_stride1,
+    float *c_allocated, float *c_aligned, int64_t c_offset, int64_t c_size0,
+    int64_t c_size1, int64_t c_stride0, int64_t c_stride1) {
+  MemRef2DF32 a = {a_allocated, a_aligned, a_offset,
+                   {a_size0, a_size1},
+                   {a_stride0, a_stride1}};
+  MemRef2DF32 b = {b_allocated, b_aligned, b_offset,
+                   {b_size0, b_size1},
+                   {b_stride0, b_stride1}};
+  MemRef2DF32 c = {c_allocated, c_aligned, c_offset,
+                   {c_size0, c_size1},
+                   {c_stride0, c_stride1}};
+
+  check_8x8_memref("lhs", &a);
+  check_8x8_memref("rhs", &b);
+  check_8x8_memref("acc", &c);
 
   float a_buf[64];
   float b_buf[64];
   float c_buf[64];
-  pack_8x8(a, a_buf);
-  pack_8x8(b, b_buf);
-  pack_8x8(c, c_buf);
+  pack_8x8(&a, a_buf);
+  pack_8x8(&b, b_buf);
+  pack_8x8(&c, c_buf);
 
   int fd = get_connection();
 
@@ -132,5 +148,5 @@ void systolic_matmul_8x8(MemRef2DF32 *a, MemRef2DF32 *b, MemRef2DF32 *c) {
   write_all(fd, c_buf, sizeof(c_buf));
 
   read_all(fd, c_buf, sizeof(c_buf));
-  unpack_8x8(c_buf, c);
+  unpack_8x8(c_buf, &c);
 }
