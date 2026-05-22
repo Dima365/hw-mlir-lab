@@ -13,7 +13,7 @@ MLIR_RUNNER_UTILS_DIR="${MLIR_RUNNER_UTILS_DIR:-/home/mandzhiev/workspace/llvm/l
 
 "$LLC" \
   -filetype=obj \
-  "$OUT_DIR/07_llvm.ll" \
+  "$OUT_DIR/08_llvm.ll" \
   -o "$OUT_DIR/mlir_program.o"
 
 "$CC" \

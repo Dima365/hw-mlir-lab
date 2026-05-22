@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
@@ -21,6 +22,7 @@ namespace mlir::standalone {
 #define GEN_PASS_DEF_STANDALONESWITCHBARFOO
 #define GEN_PASS_DEF_CONVERTLINALGMATMULTOSYSTOLIC
 #define GEN_PASS_DEF_LOWERSYSTOLICTOFUNCCALL
+#define GEN_PASS_DEF_CREATECINTERFACEENTRYWRAPPERS
 #include "Standalone/StandalonePasses.h.inc"
 
 namespace {
@@ -101,6 +103,79 @@ public:
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
+  }
+};
+
+static bool isMatmulFunctionToWrap(func::FuncOp func) {
+  if (func.getSymName() != "matmul")
+    return false;
+
+  if (func.isPrivate() || func.isDeclaration())
+    return false;
+
+  if (func.getSymName().ends_with("_entry"))
+    return false;
+
+  FunctionType functionType = func.getFunctionType();
+  if (functionType.getNumInputs() != 2 || functionType.getNumResults() != 1)
+    return false;
+
+  if (!isa<MemRefType>(functionType.getResult(0)))
+    return false;
+
+  return llvm::all_of(functionType.getInputs(),
+                      [](Type type) { return isa<MemRefType>(type); });
+}
+
+class CreateCInterfaceEntryWrappers
+    : public impl::CreateCInterfaceEntryWrappersBase<
+          CreateCInterfaceEntryWrappers> {
+public:
+  using impl::CreateCInterfaceEntryWrappersBase<
+      CreateCInterfaceEntryWrappers>::CreateCInterfaceEntryWrappersBase;
+
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+    MLIRContext *context = module.getContext();
+    OpBuilder builder(context);
+
+    SmallVector<func::FuncOp> funcsToWrap;
+    module.walk([&](func::FuncOp func) {
+      if (isMatmulFunctionToWrap(func))
+        funcsToWrap.push_back(func);
+    });
+
+    for (func::FuncOp func : funcsToWrap) {
+      std::string entryName = (func.getSymName() + "_entry").str();
+      if (module.lookupSymbol<func::FuncOp>(entryName))
+        continue;
+
+      FunctionType functionType = func.getFunctionType();
+      SmallVector<Type> entryInputs(functionType.getInputs().begin(),
+                                    functionType.getInputs().end());
+      entryInputs.push_back(functionType.getResult(0));
+      auto entryType = builder.getFunctionType(entryInputs, {});
+
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointAfter(func);
+      auto entry = func::FuncOp::create(builder, func.getLoc(), entryName,
+                                        entryType);
+      entry->setAttr("llvm.emit_c_interface", builder.getUnitAttr());
+
+      Block *body = entry.addEntryBlock();
+      builder.setInsertionPointToStart(body);
+
+      ValueRange originalInputs = body->getArguments().drop_back();
+      Value output = body->getArguments().back();
+      auto call = func::CallOp::create(builder, func.getLoc(),
+                                       func.getSymName(),
+                                       functionType.getResults(),
+                                       originalInputs);
+
+      memref::CopyOp::create(builder, func.getLoc(), call.getResult(0),
+                             output);
+      func::ReturnOp::create(builder, func.getLoc());
+    }
   }
 };
 

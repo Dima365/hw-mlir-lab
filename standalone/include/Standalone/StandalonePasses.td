@@ -45,4 +45,20 @@ def LowerSystolicToFuncCall
   ];
 }
 
+def CreateCInterfaceEntryWrappers
+    : Pass<"create-c-interface-entry-wrappers", "mlir::ModuleOp"> {
+  let summary = "Create C interface entry wrappers for public memref functions";
+  let description = [{
+    Creates <name>_entry wrappers for public memref functions of the form
+    memref inputs -> one memref result. The wrapper takes the original inputs
+    plus an explicit output memref, calls the original function, copies the
+    result into the output, and is marked with llvm.emit_c_interface.
+  }];
+
+  let dependentDialects = [
+    "mlir::func::FuncDialect",
+    "mlir::memref::MemRefDialect"
+  ];
+}
+
 #endif // STANDALONE_PASS
