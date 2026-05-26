@@ -2,8 +2,10 @@ import socket
 import struct
 import array
 import os
+from pathlib import Path
 
 SOCK = "/tmp/systolic_cocotb.sock"
+READY = "/tmp/systolic_cocotb.ready"
 MAGIC = 0x54535953
 OP_MATMUL_8X8 = 1
 
@@ -16,14 +18,16 @@ def read_exact(conn, n):
         data.extend(chunk)
     return bytes(data)
 
-try:
-    os.unlink(SOCK)
-except FileNotFoundError:
-    pass
+for path in (SOCK, READY):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
 
 srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 srv.bind(SOCK)
 srv.listen(1)
+Path(READY).touch()
 
 conn, _ = srv.accept()
 while True:

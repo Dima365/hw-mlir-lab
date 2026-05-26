@@ -64,34 +64,19 @@ static void read_all(int fd, void *buf, size_t size) {
 }
 
 static int connect_to_server(void) {
-  for (int attempt = 0; attempt < 100; ++attempt) {
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0)
-      die("socket");
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0)
+    die("socket");
 
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, SYSTOLIC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, SYSTOLIC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
 
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0)
-      return fd;
-
-    int saved_errno = errno;
-    close(fd);
-
-    if (saved_errno == ENOENT || saved_errno == ECONNREFUSED) {
-      usleep(10000);
-      continue;
-    }
-
-    errno = saved_errno;
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     die("connect");
-  }
 
-  fprintf(stderr, "systolic runtime: timed out waiting for server socket %s\n",
-          SYSTOLIC_SOCKET_PATH);
-  abort();
+  return fd;
 }
 
 static int get_connection(void) {
