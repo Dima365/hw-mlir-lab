@@ -1,89 +1,87 @@
 from typing import Callable
 
 
-Pattern = Callable[[int, int], float]
+Pattern = Callable[[int, int], int]
 
 
 def generate_matmul_mlir(m: int, k: int, n: int) -> str:
   return f"""module {{
   func.func @matmul(
-    %arg0: tensor<{m}x{k}xf32>,
-    %arg1: tensor<{k}x{n}xf32>
-  ) -> tensor<{m}x{n}xf32> {{
-    %empty = tensor.empty() : tensor<{m}x{n}xf32>
-    %cst = arith.constant 0.000000e+00 : f32
-    %zero = linalg.fill ins(%cst : f32)
-      outs(%empty : tensor<{m}x{n}xf32>) -> tensor<{m}x{n}xf32>
+    %arg0: tensor<{m}x{k}xi8>,
+    %arg1: tensor<{k}x{n}xi8>
+  ) -> tensor<{m}x{n}xi32> {{
+    %empty = tensor.empty() : tensor<{m}x{n}xi32>
+    %c0 = arith.constant 0 : i32
+    %zero = linalg.fill ins(%c0 : i32)
+      outs(%empty : tensor<{m}x{n}xi32>) -> tensor<{m}x{n}xi32>
     %result = linalg.matmul
-      ins(%arg0, %arg1 : tensor<{m}x{k}xf32>, tensor<{k}x{n}xf32>)
-      outs(%zero : tensor<{m}x{n}xf32>) -> tensor<{m}x{n}xf32>
-    return %result : tensor<{m}x{n}xf32>
+      ins(%arg0, %arg1 : tensor<{m}x{k}xi8>, tensor<{k}x{n}xi8>)
+      outs(%zero : tensor<{m}x{n}xi32>) -> tensor<{m}x{n}xi32>
+    return %result : tensor<{m}x{n}xi32>
   }}
 }}
 """
 
 
-def matrix(rows: int, cols: int, fn: Pattern) -> list[float]:
+def matrix(rows: int, cols: int, fn: Pattern) -> list[int]:
   return [fn(i, j) for i in range(rows) for j in range(cols)]
 
 
-def expected_matmul(m: int, k: int, n: int, a: list[float],
-                    b: list[float]) -> list[float]:
+def expected_matmul(m: int, k: int, n: int, a: list[int],
+                    b: list[int]) -> list[int]:
   result = []
   for i in range(m):
     for j in range(n):
-      acc = 0.0
+      acc = 0
       for kk in range(k):
         acc += a[i * k + kk] * b[kk * n + j]
       result.append(acc)
   return result
 
 
-def c_float_literal(value: float) -> str:
-  text = f"{value:.8g}"
-  if "." not in text and "e" not in text and "E" not in text:
-    text += ".0"
-  return text + "f"
+def c_int_list(values: list[int]) -> str:
+  return ", ".join(str(value) for value in values)
 
 
-def c_float_list(values: list[float]) -> str:
-  return ", ".join(c_float_literal(value) for value in values)
-
-
-def generate_main_c(m: int, k: int, n: int, a: list[float], b: list[float],
-                    expected: list[float]) -> str:
-  return f"""#include <math.h>
-#include <stdint.h>
+def generate_main_c(m: int, k: int, n: int, a: list[int], b: list[int],
+                    expected: list[int]) -> str:
+  return f"""#include <stdint.h>
 #include <stdio.h>
 
 typedef struct {{
-  float *allocated;
-  float *aligned;
+  int8_t *allocated;
+  int8_t *aligned;
   int64_t offset;
   int64_t sizes[2];
   int64_t strides[2];
-}} MemRef2DF32;
+}} MemRef2DI8;
 
-extern void _mlir_ciface_matmul_entry(MemRef2DF32 *a, MemRef2DF32 *b,
-                                      MemRef2DF32 *c);
+typedef struct {{
+  int32_t *allocated;
+  int32_t *aligned;
+  int64_t offset;
+  int64_t sizes[2];
+  int64_t strides[2];
+}} MemRef2DI32;
+
+extern void _mlir_ciface_matmul_entry(MemRef2DI8 *a, MemRef2DI8 *b,
+                                      MemRef2DI32 *c);
 
 int main(void) {{
-  float a[{m * k}] = {{ {c_float_list(a)} }};
-  float b[{k * n}] = {{ {c_float_list(b)} }};
-  float c[{m * n}] = {{0}};
-  float expected[{m * n}] = {{ {c_float_list(expected)} }};
+  int8_t a[{m * k}] = {{ {c_int_list(a)} }};
+  int8_t b[{k * n}] = {{ {c_int_list(b)} }};
+  int32_t c[{m * n}] = {{0}};
+  int32_t expected[{m * n}] = {{ {c_int_list(expected)} }};
 
-  MemRef2DF32 a_ref = {{a, a, 0, {{{m}, {k}}}, {{{k}, 1}}}};
-  MemRef2DF32 b_ref = {{b, b, 0, {{{k}, {n}}}, {{{n}, 1}}}};
-  MemRef2DF32 c_ref = {{c, c, 0, {{{m}, {n}}}, {{{n}, 1}}}};
+  MemRef2DI8 a_ref = {{a, a, 0, {{{m}, {k}}}, {{{k}, 1}}}};
+  MemRef2DI8 b_ref = {{b, b, 0, {{{k}, {n}}}, {{{n}, 1}}}};
+  MemRef2DI32 c_ref = {{c, c, 0, {{{m}, {n}}}, {{{n}, 1}}}};
 
   _mlir_ciface_matmul_entry(&a_ref, &b_ref, &c_ref);
 
   for (int64_t i = 0; i < {m * n}; ++i) {{
-    float diff = fabsf(c[i] - expected[i]);
-    if (diff > 1.0e-4f) {{
-      printf("FAIL at %ld: got %.8g expected %.8g\\n", (long)i, c[i],
-             expected[i]);
+    if (c[i] != expected[i]) {{
+      printf("FAIL at %ld: got %d expected %d\\n", (long)i, c[i], expected[i]);
       return 1;
     }}
   }}

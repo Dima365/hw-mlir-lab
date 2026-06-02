@@ -53,12 +53,12 @@ public:
   }
 };
 
-static bool is8x8F32MemRef(Type type) {
+static bool is8x8IntegerMemRef(Type type, unsigned width) {
   auto memrefType = dyn_cast<MemRefType>(type);
   return memrefType && memrefType.getRank() == 2 &&
          memrefType.getDimSize(0) == 8 &&
          memrefType.getDimSize(1) == 8 &&
-         memrefType.getElementType().isF32();
+         memrefType.getElementType().isInteger(width);
 }
 
 class ConvertMatmulToSystolicPattern
@@ -72,9 +72,9 @@ public:
     Value rhs = op.getInputs()[1];
     Value acc = op.getOutputs()[0];
 
-    if (!is8x8F32MemRef(lhs.getType()) ||
-        !is8x8F32MemRef(rhs.getType()) ||
-        !is8x8F32MemRef(acc.getType()))
+    if (!is8x8IntegerMemRef(lhs.getType(), 8) ||
+        !is8x8IntegerMemRef(rhs.getType(), 8) ||
+        !is8x8IntegerMemRef(acc.getType(), 32))
       return failure();
 
     rewriter.replaceOpWithNewOp<standalone::SystolicMatmulOp>(

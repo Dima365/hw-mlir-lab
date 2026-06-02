@@ -17,12 +17,20 @@ struct RequestHeader {
 };
 
 typedef struct {
-  float *allocated;
-  float *aligned;
+  int8_t *allocated;
+  int8_t *aligned;
   int64_t offset;
   int64_t sizes[2];
   int64_t strides[2];
-} MemRef2DF32;
+} MemRef2DI8;
+
+typedef struct {
+  int32_t *allocated;
+  int32_t *aligned;
+  int64_t offset;
+  int64_t sizes[2];
+  int64_t strides[2];
+} MemRef2DI32;
 
 static int systolic_fd = -1;
 
@@ -85,7 +93,7 @@ static int get_connection(void) {
   return systolic_fd;
 }
 
-static void check_8x8_memref(const char *name, const MemRef2DF32 *memref) {
+static void check_8x8_i8_memref(const char *name, const MemRef2DI8 *memref) {
   if (memref->sizes[0] != 8 || memref->sizes[1] != 8) {
     fprintf(stderr, "systolic runtime: %s must be 8x8, got %ldx%ld\n", name,
             (long)memref->sizes[0], (long)memref->sizes[1]);
@@ -93,54 +101,70 @@ static void check_8x8_memref(const char *name, const MemRef2DF32 *memref) {
   }
 }
 
-static void pack_8x8(const MemRef2DF32 *src, float dst[64]) {
-  float *base = src->aligned + src->offset;
+static void check_8x8_i32_memref(const char *name, const MemRef2DI32 *memref) {
+  if (memref->sizes[0] != 8 || memref->sizes[1] != 8) {
+    fprintf(stderr, "systolic runtime: %s must be 8x8, got %ldx%ld\n", name,
+            (long)memref->sizes[0], (long)memref->sizes[1]);
+    abort();
+  }
+}
+
+static void pack_i8_8x8(const MemRef2DI8 *src, int8_t dst[64]) {
+  int8_t *base = src->aligned + src->offset;
   for (int64_t i = 0; i < 8; ++i)
     for (int64_t j = 0; j < 8; ++j)
       dst[i * 8 + j] = base[i * src->strides[0] + j * src->strides[1]];
 }
 
-static void unpack_8x8(const float src[64], MemRef2DF32 *dst) {
-  float *base = dst->aligned + dst->offset;
+static void pack_i32_8x8(const MemRef2DI32 *src, int32_t dst[64]) {
+  int32_t *base = src->aligned + src->offset;
+  for (int64_t i = 0; i < 8; ++i)
+    for (int64_t j = 0; j < 8; ++j)
+      dst[i * 8 + j] = base[i * src->strides[0] + j * src->strides[1]];
+}
+
+static void unpack_i32_8x8(const int32_t src[64], MemRef2DI32 *dst) {
+  int32_t *base = dst->aligned + dst->offset;
   for (int64_t i = 0; i < 8; ++i)
     for (int64_t j = 0; j < 8; ++j)
       base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
 }
 
 void systolic_matmul_8x8(
-    float *a_allocated, float *a_aligned, int64_t a_offset, int64_t a_size0,
+    int8_t *a_allocated, int8_t *a_aligned, int64_t a_offset, int64_t a_size0,
     int64_t a_size1, int64_t a_stride0, int64_t a_stride1,
-    float *b_allocated, float *b_aligned, int64_t b_offset, int64_t b_size0,
+    int8_t *b_allocated, int8_t *b_aligned, int64_t b_offset, int64_t b_size0,
     int64_t b_size1, int64_t b_stride0, int64_t b_stride1,
-    float *c_allocated, float *c_aligned, int64_t c_offset, int64_t c_size0,
+    int32_t *c_allocated, int32_t *c_aligned, int64_t c_offset,
+    int64_t c_size0,
     int64_t c_size1, int64_t c_stride0, int64_t c_stride1) {
-  MemRef2DF32 a = {a_allocated, a_aligned, a_offset,
-                   {a_size0, a_size1},
-                   {a_stride0, a_stride1}};
-  MemRef2DF32 b = {b_allocated, b_aligned, b_offset,
-                   {b_size0, b_size1},
-                   {b_stride0, b_stride1}};
-  MemRef2DF32 c = {c_allocated, c_aligned, c_offset,
+  MemRef2DI8 a = {a_allocated, a_aligned, a_offset,
+                  {a_size0, a_size1},
+                  {a_stride0, a_stride1}};
+  MemRef2DI8 b = {b_allocated, b_aligned, b_offset,
+                  {b_size0, b_size1},
+                  {b_stride0, b_stride1}};
+  MemRef2DI32 c = {c_allocated, c_aligned, c_offset,
                    {c_size0, c_size1},
                    {c_stride0, c_stride1}};
 
-  check_8x8_memref("lhs", &a);
-  check_8x8_memref("rhs", &b);
-  check_8x8_memref("acc", &c);
+  check_8x8_i8_memref("lhs", &a);
+  check_8x8_i8_memref("rhs", &b);
+  check_8x8_i32_memref("acc", &c);
 
-  float a_buf[64];
-  float b_buf[64];
-  float c_buf[64];
-  pack_8x8(&a, a_buf);
-  pack_8x8(&b, b_buf);
-  pack_8x8(&c, c_buf);
+  int8_t a_buf[64];
+  int8_t b_buf[64];
+  int32_t c_buf[64];
+  pack_i8_8x8(&a, a_buf);
+  pack_i8_8x8(&b, b_buf);
+  pack_i32_8x8(&c, c_buf);
 
   int fd = get_connection();
 
   struct RequestHeader header;
   header.magic = 0x54535953u; // "SYST" little-endian
   header.opcode = SYSTOLIC_OPCODE_MATMUL_8X8;
-  header.payload_bytes = 3u * 64u * sizeof(float);
+  header.payload_bytes = 2u * 64u * sizeof(int8_t) + 64u * sizeof(int32_t);
 
   write_all(fd, &header, sizeof(header));
   write_all(fd, a_buf, sizeof(a_buf));
@@ -148,5 +172,5 @@ void systolic_matmul_8x8(
   write_all(fd, c_buf, sizeof(c_buf));
 
   read_all(fd, c_buf, sizeof(c_buf));
-  unpack_8x8(c_buf, &c);
+  unpack_i32_8x8(c_buf, &c);
 }

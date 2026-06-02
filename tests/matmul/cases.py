@@ -13,16 +13,16 @@ class MatmulTest:
   b_fn: Pattern
 
 
-def ones(i: int, j: int) -> float:
-  return 1.0
+def ones(i: int, j: int) -> int:
+  return 1
 
 
-def row_col(i: int, j: int) -> float:
-  return float((i + 2 * j) % 7 - 3)
+def row_col(i: int, j: int) -> int:
+  return (i + 2 * j) % 7 - 3
 
 
-def small_mod(i: int, j: int) -> float:
-  return float((3 * i - j) % 5 - 2)
+def small_mod(i: int, j: int) -> int:
+  return (3 * i - j) % 5 - 2
 
 
 TESTS = [

@@ -17,9 +17,9 @@ C driver. Его вызывают `demo/run.sh` и тесты из `tests/matmul
 
 Выход: `<object-dir>/interface.o`
 
-C runtime компилируется в object-файл. В нем находится реализация
+C runtime компилируется в object-файл. В нем находится integer-реализация
 `systolic_matmul_8x8`, которая подключается к Python/Verilator simulator через
-Unix socket.
+Unix socket. Runtime ABI использует `i8` входы и `i32` аккумулятор.
 
 ## 2. MLIR Program Object
 

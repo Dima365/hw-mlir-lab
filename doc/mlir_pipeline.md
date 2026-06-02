@@ -54,8 +54,14 @@ bufferization.
 Выход: `05_systolic_memref.mlir`
 
 `--convert-linalg-matmul-to-systolic` заменяет подходящие `linalg.matmul`
-операции на `standalone.systolic_matmul`. Сейчас pass ожидает 8x8x8 f32 matmul
-на memref-операндах.
+операции на `standalone.systolic_matmul`. Сейчас pass ожидает 8x8x8 integer
+matmul на memref-операндах:
+
+```text
+lhs: memref<8x8xi8>
+rhs: memref<8x8xi8>
+acc: memref<8x8xi32>
+```
 
 ## 6. Systolic Call Lowering
 
