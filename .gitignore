@@ -7,7 +7,6 @@ out/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
-Makefile
 .ninja_*
 ninja-*.log
 install_manifest.txt

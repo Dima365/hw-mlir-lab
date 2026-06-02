@@ -13,7 +13,7 @@ C driver. Его вызывают `demo/run.sh` и тесты из `tests/matmul
 
 ## 1. Runtime Object
 
-Вход: `simulator/interface.c`
+Вход: `interface/interface.c`
 
 Выход: `<object-dir>/interface.o`
 

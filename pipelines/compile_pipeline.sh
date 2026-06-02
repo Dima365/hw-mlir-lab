@@ -14,7 +14,7 @@ OBJECT_DIR="$4"
 CC="${CC:-clang}"
 LLC="${LLC:-/home/mandzhiev/workspace/llvm/llvm-project/build/bin/llc}"
 MLIR_RUNNER_UTILS_DIR="${MLIR_RUNNER_UTILS_DIR:-/home/mandzhiev/workspace/llvm/llvm-project/build/lib}"
-RUNTIME_SRC="${RUNTIME_SRC:-simulator/interface.c}"
+RUNTIME_SRC="${RUNTIME_SRC:-interface/interface.c}"
 
 mkdir -p "$OBJECT_DIR"
 

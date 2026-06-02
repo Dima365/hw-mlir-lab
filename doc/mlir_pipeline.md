@@ -71,7 +71,7 @@ acc: memref<8x8xi32>
 
 `--lower-systolic-to-func-call` заменяет `standalone.systolic_matmul` на
 обычный `func.call @systolic_matmul_8x8`. Эта функция реализована в runtime
-файле `simulator/interface.c`.
+файле `interface/interface.c`.
 
 ## 7. LLVM Dialect Lowering
 
