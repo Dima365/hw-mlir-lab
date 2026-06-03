@@ -43,11 +43,9 @@ Cocotb testbench создает Unix socket и ready-файл:
 Для каждого matmul request cocotb:
 
 - читает `i8` матрицы A и B;
-- загружает их в `a_flat` и `b_flat`;
+- читает `i32` аккумулятор C;
+- загружает A, B и C в `a_flat`, `b_flat` и `c_in_flat`;
 - подает `start`;
 - ждет `done`;
-- читает `c_flat`;
+- читает `c_out_flat`;
 - возвращает `i32` результат обратно в app.
-
-Так demo и integration tests используют RTL simulation вместо Python software
-model.

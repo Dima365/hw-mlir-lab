@@ -6,7 +6,7 @@ from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, Timer
+from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
 
 SOCK = Path(os.environ.get("SOCK", "/tmp/systolic_cocotb.sock"))
@@ -67,6 +67,13 @@ def pack_i8(values):
   return word
 
 
+def pack_i32(values):
+  word = 0
+  for idx, value in enumerate(values):
+    word |= (value & 0xFFFFFFFF) << (idx * 32)
+  return word
+
+
 def unpack_i32(word):
   values = []
   for idx in range(64):
@@ -77,9 +84,10 @@ def unpack_i32(word):
   return values
 
 
-async def run_array(dut, a, b):
+async def run_array(dut, a, b, c_in):
   dut.a_flat.value = pack_i8(a)
   dut.b_flat.value = pack_i8(b)
+  dut.c_in_flat.value = pack_i32(c_in)
   dut.start.value = 1
   await RisingEdge(dut.clk)
   dut.start.value = 0
@@ -87,7 +95,8 @@ async def run_array(dut, a, b):
   for _ in range(32):
     await RisingEdge(dut.clk)
     if int(dut.done.value) == 1:
-      return unpack_i32(int(dut.c_flat.value))
+      await ReadOnly()
+      return unpack_i32(int(dut.c_out_flat.value))
 
   raise TimeoutError("DUT did not assert done")
 
@@ -97,6 +106,7 @@ async def reset_dut(dut):
   dut.start.value = 0
   dut.a_flat.value = 0
   dut.b_flat.value = 0
+  dut.c_in_flat.value = 0
   await RisingEdge(dut.clk)
   await RisingEdge(dut.clk)
   dut.rst.value = 0
@@ -143,8 +153,7 @@ async def test_socket_array(dut):
       b = struct.unpack("<64b", await read_exact(conn, 64))
       c_in = struct.unpack("<64i", await read_exact(conn, 64 * 4))
 
-      partial = await run_array(dut, a, b)
-      c = [c_in[idx] + partial[idx] for idx in range(64)]
+      c = await run_array(dut, a, b, c_in)
       conn.sendall(struct.pack("<64i", *c))
 
   except EOFError:

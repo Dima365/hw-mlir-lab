@@ -11,7 +11,8 @@ module array #(
 
     input  logic [N*N*DATA_W-1:0] a_flat,
     input  logic [N*N*DATA_W-1:0] b_flat,
-    output logic [N*N*ACC_W-1:0]  c_flat
+    input  logic [N*N*ACC_W-1:0]  c_in_flat,
+    output logic [N*N*ACC_W-1:0]  c_out_flat
 );
 
     localparam int MATRIX_ELEMS = N * N;
@@ -23,13 +24,15 @@ module array #(
     logic signed [DATA_W-1:0] b_matrix [0:MATRIX_ELEMS-1];
     logic signed [ACC_W-1:0] a_ext [0:MATRIX_ELEMS-1];
     logic signed [ACC_W-1:0] b_ext [0:MATRIX_ELEMS-1];
+    logic signed [ACC_W-1:0] c_in_matrix [0:MATRIX_ELEMS-1];
     logic signed [ACC_W-1:0] acc [0:MATRIX_ELEMS-1];
 
     generate
         for (genvar idx = 0; idx < MATRIX_ELEMS; idx++) begin : pack_matrix
             assign a_matrix[idx] = a_flat[idx*DATA_W +: DATA_W];
             assign b_matrix[idx] = b_flat[idx*DATA_W +: DATA_W];
-            assign c_flat[idx*ACC_W +: ACC_W] = acc[idx];
+            assign c_in_matrix[idx] = c_in_flat[idx*ACC_W +: ACC_W];
+            assign c_out_flat[idx*ACC_W +: ACC_W] = acc[idx];
 
             if (ACC_W > DATA_W) begin : sign_extend
                 assign a_ext[idx] = {{(ACC_W-DATA_W){a_matrix[idx][DATA_W-1]}},
@@ -60,7 +63,7 @@ module array #(
                 k <= '0;
 
                 for (int idx = 0; idx < MATRIX_ELEMS; idx++) begin
-                    acc[idx] <= '0;
+                    acc[idx] <= c_in_matrix[idx];
                 end
             end else if (busy) begin
                 for (int i = 0; i < N; i++) begin
