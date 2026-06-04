@@ -34,6 +34,7 @@ obj_dir/
 sim_build/
 *.vcd
 *.fst
+*.fst.hier
 *.gtkw
 coverage.dat
 results.xml
