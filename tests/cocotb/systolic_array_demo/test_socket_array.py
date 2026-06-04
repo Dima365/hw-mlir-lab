@@ -2,11 +2,12 @@ import os
 import socket
 import struct
 import subprocess
+import time
 from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ReadOnly, RisingEdge, Timer
+from cocotb.triggers import ReadOnly, ReadWrite, RisingEdge
 
 
 SOCK = Path(os.environ.get("SOCK", "/tmp/systolic_cocotb.sock"))
@@ -19,15 +20,14 @@ OP_MATMUL_8X8 = 1
 PAYLOAD_BYTES = 2 * 64 + 64 * 4
 
 
-async def poll_until_ready(fn, timeout_ns=2_000_000_000):
-  elapsed = 0
-  step = 1_000_000
-  while elapsed < timeout_ns:
+async def poll_until_ready(fn, timeout_s=2.0):
+  deadline = time.monotonic() + timeout_s
+  step_s = 0.001
+  while time.monotonic() < deadline:
     result = fn()
     if result is not None:
       return result
-    await Timer(step, units="ns")
-    elapsed += step
+    time.sleep(step_s)
   raise TimeoutError("timed out waiting for socket event")
 
 
@@ -85,6 +85,7 @@ def unpack_i32(word):
 
 
 async def run_array(dut, a, b, c_in):
+  await ReadWrite()
   dut.a_flat.value = pack_i8(a)
   dut.b_flat.value = pack_i8(b)
   dut.c_in_flat.value = pack_i32(c_in)
