@@ -1,11 +1,11 @@
 # Cocotb Pipeline
 
-Этот файл описывает `pipelines/cocotb_pipeline.sh`.
+This file describes `pipelines/cocotb_pipeline.sh`.
 
-Скрипт запускает compiled app вместе с cocotb/Verilator testbench для
-`ip/systolic_array_demo/array.sv`.
+The script runs the compiled app together with the cocotb/Verilator testbench
+for `ip/systolic_array_demo/array.sv`.
 
-Интерфейс:
+Interface:
 
 ```bash
 ./pipelines/cocotb_pipeline.sh <app>
@@ -13,39 +13,39 @@
 
 ## 1. Start Cocotb
 
-Скрипт вызывает Makefile:
+The script invokes the Makefile:
 
 ```bash
 make -C tests/cocotb/systolic_array_demo
 ```
 
-В переменных окружения передаются:
+The following environment variables are passed:
 
 ```text
-APP       путь к compiled app
-REPO_ROOT корень репозитория
+APP       path to the compiled app
+REPO_ROOT repository root
 ```
 
 ## 2. Socket Bridge
 
-Cocotb testbench создает Unix socket и ready-файл:
+The cocotb testbench creates a Unix socket and a ready file:
 
 ```text
 /tmp/systolic_cocotb.sock
 /tmp/systolic_cocotb.ready
 ```
 
-После этого cocotb запускает `<app>`. Runtime function `systolic_matmul_8x8`
-из `interface/interface.c` подключается к этому socket.
+After that, cocotb starts `<app>`. The runtime function `systolic_matmul_8x8`
+from `interface/interface.c` connects to this socket.
 
 ## 3. Drive RTL
 
-Для каждого matmul request cocotb:
+For each matmul request, cocotb:
 
-- читает `i8` матрицы A и B;
-- читает `i32` аккумулятор C;
-- загружает A, B и C в `a_flat`, `b_flat` и `c_in_flat`;
-- подает `start`;
-- ждет `done`;
-- читает `c_out_flat`;
-- возвращает `i32` результат обратно в app.
+- reads the `i8` A and B matrices;
+- reads the `i32` C accumulator;
+- loads A, B, and C into `a_flat`, `b_flat`, and `c_in_flat`;
+- asserts `start`;
+- waits for `done`;
+- reads `c_out_flat`;
+- returns the `i32` result back to the app.

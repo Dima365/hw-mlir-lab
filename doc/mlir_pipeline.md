@@ -1,61 +1,61 @@
 # MLIR Pipeline
 
-Этот файл описывает шаги из `pipelines/mlir_pipeline.sh`. По умолчанию входной файл -
-`demo/matmul.mlir`, а промежуточные результаты записываются в
+This file describes the steps in `pipelines/mlir_pipeline.sh`. By default, the
+input file is `demo/matmul.mlir`, and intermediate results are written to
 `build/mlir-pipeline/`.
 
 ## 1. Tiling
 
-Вход: `demo/matmul.mlir`
+Input: `demo/matmul.mlir`
 
-Выход: `01_tiled.mlir`
+Output: `01_tiled.mlir`
 
-Запускается transform schedule из `transforms/matmul_tile.mlir`. Он разбивает
-`linalg.matmul` на тайлы размера 8x8x8, чтобы отдельные matmul-операции
-соответствовали размеру systolic array.
+This step runs the transform schedule from `transforms/matmul_tile.mlir`. It
+tiles `linalg.matmul` into 8x8x8 tiles so that individual matmul operations
+match the systolic array size.
 
 ## 2. Padding
 
-Вход: `01_tiled.mlir`
+Input: `01_tiled.mlir`
 
-Выход: `02_padded.mlir`
+Output: `02_padded.mlir`
 
-Запускается transform schedule из `transforms/matmul_pad.mlir`. Он дополняет
-маленькие или краевые тайлы до 8x8, чтобы runtime systolic array всегда получал
-матрицы фиксированного размера.
+This step runs the transform schedule from `transforms/matmul_pad.mlir`. It pads
+small or boundary tiles to 8x8 so that the runtime systolic array always receives
+fixed-size matrices.
 
 ## 3. Bufferization
 
-Вход: `02_padded.mlir`
+Input: `02_padded.mlir`
 
-Выход: `03_bufferized.mlir`
+Output: `03_bufferized.mlir`
 
-`--one-shot-bufferize="bufferize-function-boundaries"` переводит tensor-level IR
-в memref-level IR. После этого данные представлены как буферы памяти, а не как
-SSA tensor values. `--canonicalize` и `--cse` чистят результат после
-bufferization.
+`--one-shot-bufferize="bufferize-function-boundaries"` converts tensor-level IR
+to memref-level IR. After this step, data is represented as memory buffers
+instead of SSA tensor values. `--canonicalize` and `--cse` clean up the result
+after bufferization.
 
 ## 4. Entry Wrapper
 
-Вход: `03_bufferized.mlir`
+Input: `03_bufferized.mlir`
 
-Выход: `04_entry_wrapped.mlir`
+Output: `04_entry_wrapped.mlir`
 
-`--create-c-interface-entry-wrappers` создает стабильную внешнюю функцию
-`matmul_entry`. Она принимает входные memref и выходной memref, вызывает
-исходную `matmul`, а затем копирует результат в переданный выходной буфер.
-На wrapper добавляется `llvm.emit_c_interface`, чтобы C-код мог вызывать
+`--create-c-interface-entry-wrappers` creates a stable external function named
+`matmul_entry`. It takes input memrefs and an output memref, calls the original
+`matmul`, and copies the result into the provided output buffer. The wrapper gets
+`llvm.emit_c_interface` so that C code can call
 `_mlir_ciface_matmul_entry`.
 
 ## 5. Systolic Conversion
 
-Вход: `04_entry_wrapped.mlir`
+Input: `04_entry_wrapped.mlir`
 
-Выход: `05_systolic_memref.mlir`
+Output: `05_systolic_memref.mlir`
 
-`--convert-linalg-matmul-to-systolic` заменяет подходящие `linalg.matmul`
-операции на `standalone.systolic_matmul`. Сейчас pass ожидает 8x8x8 integer
-matmul на memref-операндах:
+`--convert-linalg-matmul-to-systolic` replaces matching `linalg.matmul`
+operations with `standalone.systolic_matmul`. The pass currently expects an
+8x8x8 integer matmul over memref operands:
 
 ```text
 lhs: memref<8x8xi8>
@@ -65,29 +65,29 @@ acc: memref<8x8xi32>
 
 ## 6. Systolic Call Lowering
 
-Вход: `05_systolic_memref.mlir`
+Input: `05_systolic_memref.mlir`
 
-Выход: `06_systolic_call.mlir`
+Output: `06_systolic_call.mlir`
 
-`--lower-systolic-to-func-call` заменяет `standalone.systolic_matmul` на
-обычный `func.call @systolic_matmul_8x8`. Эта функция реализована в runtime
-файле `interface/interface.c`.
+`--lower-systolic-to-func-call` replaces `standalone.systolic_matmul` with a
+regular `func.call @systolic_matmul_8x8`. This function is implemented in the
+interface file `interface/interface.c`.
 
 ## 7. LLVM Dialect Lowering
 
-Вход: `06_systolic_call.mlir`
+Input: `06_systolic_call.mlir`
 
-Выход: `07_llvm.mlir`
+Output: `07_llvm.mlir`
 
-Оставшиеся MLIR dialects опускаются к LLVM dialect. На этом шаге `linalg`,
-`scf`, `cf`, `arith`, `index`, `func` и `memref` постепенно заменяются на
-низкоуровневые LLVM-compatible операции.
+The remaining MLIR dialects are lowered to the LLVM dialect. In this step,
+`linalg`, `scf`, `cf`, `arith`, `index`, `func`, and `memref` are gradually
+replaced with low-level LLVM-compatible operations.
 
 ## 8. LLVM IR Translation
 
-Вход: `07_llvm.mlir`
+Input: `07_llvm.mlir`
 
-Выход: `08_llvm.ll`
+Output: `08_llvm.ll`
 
-`mlir-translate --mlir-to-llvmir` переводит MLIR LLVM dialect в обычный LLVM IR.
-Этот файл уже можно компилировать через `llc` или совместимый LLVM toolchain.
+`mlir-translate --mlir-to-llvmir` converts the MLIR LLVM dialect to regular LLVM
+IR. This file can then be compiled with `llc` or a compatible LLVM toolchain.

@@ -1,11 +1,12 @@
 # Compile Pipeline
 
-Этот файл описывает шаги из `pipelines/compile_pipeline.sh`.
+This file describes the steps in `pipelines/compile_pipeline.sh`.
 
-`pipelines/compile_pipeline.sh` собирает исполняемый файл из результата MLIR pipeline и
-C driver. Его вызывают `demo/run.sh` и тесты из `tests/matmul/build.py`.
+`pipelines/compile_pipeline.sh` builds an executable from the MLIR pipeline
+output and a C driver. It is used by `demo/run.sh` and the tests in
+`tests/matmul/build.py`.
 
-Интерфейс:
+Interface:
 
 ```bash
 ./pipelines/compile_pipeline.sh <llvm-ir> <main.c> <app> <object-dir>
@@ -13,28 +14,29 @@ C driver. Его вызывают `demo/run.sh` и тесты из `tests/matmul
 
 ## 1. Interface Object
 
-Вход: `interface/interface.c`
+Input: `interface/interface.c`
 
-Выход: `<object-dir>/interface.o`
+Output: `<object-dir>/interface.o`
 
-Interface bridge компилируется в object-файл. В нем находится integer-реализация
-`systolic_matmul_8x8`, которая подключается к Python/Verilator simulator через
-Unix socket. Runtime ABI использует `i8` входы и `i32` аккумулятор.
+The interface bridge is compiled into an object file. It provides the integer
+implementation of `systolic_matmul_8x8`, which connects to the Python/Verilator
+simulator through a Unix socket. The runtime ABI uses `i8` inputs and an `i32`
+accumulator.
 
 ## 2. MLIR Program Object
 
-Вход: `<llvm-ir>`
+Input: `<llvm-ir>`
 
-Выход: `<object-dir>/mlir_program.o`
+Output: `<object-dir>/mlir_program.o`
 
-`llc` компилирует LLVM IR, полученный из MLIR, в object-файл.
+`llc` compiles the LLVM IR produced from MLIR into an object file.
 
 ## 3. Link App
 
-Входы: `<object-dir>/mlir_program.o`, `<object-dir>/interface.o`, `<main.c>`
+Inputs: `<object-dir>/mlir_program.o`, `<object-dir>/interface.o`, `<main.c>`
 
-Выход: `<app>`
+Output: `<app>`
 
-`clang` линкует MLIR object, interface object, C driver и MLIR runner utils в
-готовый executable. Для линковки используется LLVM linker `ld.lld` из
+`clang` links the MLIR object, interface object, C driver, and MLIR runner utils
+into the final executable. Linking uses the LLVM linker `ld.lld` from
 `/opt/llvm/bin`.
