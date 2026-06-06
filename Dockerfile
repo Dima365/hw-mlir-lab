@@ -20,7 +20,7 @@ RUN git clone https://github.com/llvm/llvm-project.git /src/llvm-project \
 
 RUN cmake -S /src/llvm-project/llvm -B /build/llvm -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DLLVM_ENABLE_PROJECTS="clang;mlir" \
+    -DLLVM_ENABLE_PROJECTS="clang;mlir;lld" \
     -DLLVM_TARGETS_TO_BUILD="X86" \
     -DLLVM_ENABLE_ASSERTIONS=ON \
     -DLLVM_INSTALL_UTILS=ON \

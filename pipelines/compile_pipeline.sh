@@ -14,33 +14,36 @@ OBJECT_DIR="$4"
 if [ -z "${CC+x}" ]; then
   if [ -x /opt/llvm/bin/clang ]; then
     CC="/opt/llvm/bin/clang"
-  elif [ -x /home/mandzhiev/workspace/llvm/llvm-project/build/bin/clang ]; then
-    CC="/home/mandzhiev/workspace/llvm/llvm-project/build/bin/clang"
   else
-    CC="clang"
+    echo "compile_pipeline: clang not found at /opt/llvm/bin/clang" >&2
+    echo "Run this pipeline through Docker, for example: make demo" >&2
+    exit 1
   fi
 fi
 if [ -z "${LLC+x}" ]; then
   if [ -x /opt/llvm/bin/llc ]; then
     LLC="/opt/llvm/bin/llc"
-  elif [ -x /home/mandzhiev/workspace/llvm/llvm-project/build/bin/llc ]; then
-    LLC="/home/mandzhiev/workspace/llvm/llvm-project/build/bin/llc"
-  elif command -v llc >/dev/null 2>&1; then
-    LLC="llc"
   else
-    echo "compile_pipeline: llc not found" >&2
+    echo "compile_pipeline: llc not found at /opt/llvm/bin/llc" >&2
+    echo "Run this pipeline through Docker, for example: make demo" >&2
+    exit 1
+  fi
+fi
+if [ -z "${LD_LLD+x}" ]; then
+  if [ -x /opt/llvm/bin/ld.lld ]; then
+    LD_LLD="/opt/llvm/bin/ld.lld"
+  else
+    echo "compile_pipeline: ld.lld not found at /opt/llvm/bin/ld.lld" >&2
+    echo "Run: make docker-build" >&2
     exit 1
   fi
 fi
 if [ -z "${MLIR_RUNNER_UTILS_DIR+x}" ]; then
   if [ -d /opt/llvm/lib ]; then
     MLIR_RUNNER_UTILS_DIR="/opt/llvm/lib"
-  elif [ -d /home/mandzhiev/workspace/llvm/llvm-project/build/lib ]; then
-    MLIR_RUNNER_UTILS_DIR="/home/mandzhiev/workspace/llvm/llvm-project/build/lib"
-  elif command -v llvm-config >/dev/null 2>&1; then
-    MLIR_RUNNER_UTILS_DIR="$(llvm-config --libdir)"
   else
-    echo "compile_pipeline: MLIR runner utils lib directory not found" >&2
+    echo "compile_pipeline: MLIR runner utils lib directory not found at /opt/llvm/lib" >&2
+    echo "Run this pipeline through Docker, for example: make demo" >&2
     exit 1
   fi
 fi
@@ -61,6 +64,7 @@ mkdir -p "$OBJECT_DIR"
   -o "$OBJECT_DIR/mlir_program.o"
 
 "$CC" \
+  -fuse-ld="$LD_LLD" \
   "$OBJECT_DIR/mlir_program.o" \
   "$OBJECT_DIR/interface.o" \
   "$MAIN_C" \

@@ -4,22 +4,18 @@ set -euo pipefail
 if [ -z "${OPT+x}" ]; then
   if [ -x standalone/build/bin/standalone-opt ]; then
     OPT="standalone/build/bin/standalone-opt"
-  elif command -v standalone-opt >/dev/null 2>&1; then
-    OPT="standalone-opt"
   else
-    echo "mlir_pipeline: standalone-opt not found" >&2
+    echo "mlir_pipeline: standalone-opt not found at standalone/build/bin/standalone-opt" >&2
+    echo "Run: make standalone" >&2
     exit 1
   fi
 fi
 if [ -z "${MLIR_TRANSLATE+x}" ]; then
   if [ -x /opt/llvm/bin/mlir-translate ]; then
     MLIR_TRANSLATE="/opt/llvm/bin/mlir-translate"
-  elif [ -x /home/mandzhiev/workspace/llvm/llvm-project/build/bin/mlir-translate ]; then
-    MLIR_TRANSLATE="/home/mandzhiev/workspace/llvm/llvm-project/build/bin/mlir-translate"
-  elif command -v mlir-translate >/dev/null 2>&1; then
-    MLIR_TRANSLATE="mlir-translate"
   else
-    echo "mlir_pipeline: mlir-translate not found" >&2
+    echo "mlir_pipeline: mlir-translate not found at /opt/llvm/bin/mlir-translate" >&2
+    echo "Run this pipeline through Docker, for example: make demo" >&2
     exit 1
   fi
 fi
