@@ -1,0 +1,14 @@
+services:
+  dev:
+    build:
+      context: .
+      args:
+        LLVM_COMMIT: ${LLVM_COMMIT:-8a688983ab0b5aa3ac3cfbcd94d3727d023a169e}
+    working_dir: /work
+    volumes:
+      - .:/work
+    environment:
+      PATH: /opt/venv/bin:/opt/llvm/bin:/work/standalone/build/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      LLVM_DIR: /opt/llvm/lib/cmake/llvm
+      MLIR_DIR: /opt/llvm/lib/cmake/mlir
+      LD_LIBRARY_PATH: /opt/llvm/lib

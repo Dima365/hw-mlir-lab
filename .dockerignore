@@ -1,0 +1,10 @@
+.git/
+.venv/
+build/
+standalone/build/
+**/__pycache__/
+**/*.pyc
+tests/cocotb/systolic_array_demo/sim_build/
+tests/cocotb/systolic_array_demo/dump.fst
+tests/cocotb/systolic_array_demo/dump.fst.hier
+tests/cocotb/systolic_array_demo/results.xml

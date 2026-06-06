@@ -10,13 +10,9 @@ APP="$1"
 REPO_ROOT="$(pwd)"
 COCOTB_TEST_DIR="${COCOTB_TEST_DIR:-tests/cocotb/systolic_array_demo}"
 
-if [ -x "$REPO_ROOT/.venv/bin/cocotb-config" ]; then
-  export PATH="$REPO_ROOT/.venv/bin:$PATH"
-fi
-
 if ! cocotb-config --makefiles >/dev/null 2>&1; then
   echo "cocotb pipeline: cocotb-config is not usable." >&2
-  echo "Install or repair cocotb, for example: python3 -m venv .venv && .venv/bin/python -m pip install cocotb" >&2
+  echo "Run this pipeline through Docker, for example: make demo" >&2
   exit 1
 fi
 

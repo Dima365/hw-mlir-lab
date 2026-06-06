@@ -11,9 +11,39 @@ MAIN_C="$2"
 APP="$3"
 OBJECT_DIR="$4"
 
-CC="${CC:-clang}"
-LLC="${LLC:-/home/mandzhiev/workspace/llvm/llvm-project/build/bin/llc}"
-MLIR_RUNNER_UTILS_DIR="${MLIR_RUNNER_UTILS_DIR:-/home/mandzhiev/workspace/llvm/llvm-project/build/lib}"
+if [ -z "${CC+x}" ]; then
+  if [ -x /opt/llvm/bin/clang ]; then
+    CC="/opt/llvm/bin/clang"
+  elif [ -x /home/mandzhiev/workspace/llvm/llvm-project/build/bin/clang ]; then
+    CC="/home/mandzhiev/workspace/llvm/llvm-project/build/bin/clang"
+  else
+    CC="clang"
+  fi
+fi
+if [ -z "${LLC+x}" ]; then
+  if [ -x /opt/llvm/bin/llc ]; then
+    LLC="/opt/llvm/bin/llc"
+  elif [ -x /home/mandzhiev/workspace/llvm/llvm-project/build/bin/llc ]; then
+    LLC="/home/mandzhiev/workspace/llvm/llvm-project/build/bin/llc"
+  elif command -v llc >/dev/null 2>&1; then
+    LLC="llc"
+  else
+    echo "compile_pipeline: llc not found" >&2
+    exit 1
+  fi
+fi
+if [ -z "${MLIR_RUNNER_UTILS_DIR+x}" ]; then
+  if [ -d /opt/llvm/lib ]; then
+    MLIR_RUNNER_UTILS_DIR="/opt/llvm/lib"
+  elif [ -d /home/mandzhiev/workspace/llvm/llvm-project/build/lib ]; then
+    MLIR_RUNNER_UTILS_DIR="/home/mandzhiev/workspace/llvm/llvm-project/build/lib"
+  elif command -v llvm-config >/dev/null 2>&1; then
+    MLIR_RUNNER_UTILS_DIR="$(llvm-config --libdir)"
+  else
+    echo "compile_pipeline: MLIR runner utils lib directory not found" >&2
+    exit 1
+  fi
+fi
 RUNTIME_SRC="${RUNTIME_SRC:-interface/interface.c}"
 
 mkdir -p "$OBJECT_DIR"
