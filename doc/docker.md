@@ -48,7 +48,7 @@ make docker-build
 To override the LLVM commit:
 
 ```bash
-LLVM_COMMIT=<llvm-project-commit> docker compose build
+LLVM_COMMIT=<llvm-project-commit> make docker-build
 ```
 
 ## Build standalone-opt
