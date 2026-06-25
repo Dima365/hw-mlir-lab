@@ -51,6 +51,10 @@ RUNTIME_SRC="${RUNTIME_SRC:-interface/interface.c}"
 
 mkdir -p "$OBJECT_DIR"
 
+# Generate the opcode header from the manifest (single source of truth)
+# before compiling the runtime bridge that includes it.
+"${PYTHON:-python3}" tools/gen_opcodes.py
+
 "$CC" \
   -Wall \
   -Wextra \

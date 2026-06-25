@@ -20,10 +20,10 @@ docker-config:
 
 clean-generated:
 	rm -rf build
-	rm -f tests/cocotb/systolic_array_demo/dump.fst
-	rm -f tests/cocotb/systolic_array_demo/dump.fst.hier
-	rm -f tests/cocotb/systolic_array_demo/results.xml
-	rm -rf tests/cocotb/systolic_array_demo/sim_build
+	rm -f tests/cocotb/dump.fst
+	rm -f tests/cocotb/dump.fst.hier
+	rm -f tests/cocotb/results.xml
+	rm -rf tests/cocotb/sim_build
 
 clean-standalone:
 	rm -rf standalone/build

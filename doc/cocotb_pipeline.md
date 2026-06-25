@@ -8,15 +8,18 @@ for `ip/systolic_array_demo/array.sv`.
 Interface:
 
 ```bash
-./pipelines/cocotb_pipeline.sh <app>
+./pipelines/cocotb_pipeline.sh <app> [ip]
 ```
+
+`ip` selects which IP block to simulate (default `matmul`); its toplevel,
+sources, and parameters come from the manifest `ips.yaml`.
 
 ## 1. Start Cocotb
 
-The script invokes the Makefile:
+The script invokes the generic Makefile:
 
 ```bash
-make -C tests/cocotb/systolic_array_demo
+make -C tests/cocotb IP=<ip>
 ```
 
 The following environment variables are passed:
@@ -24,6 +27,7 @@ The following environment variables are passed:
 ```text
 APP       path to the compiled app
 REPO_ROOT repository root
+IP        IP block name (selects toplevel/sources/params from ips.yaml)
 ```
 
 ## 2. Socket Bridge

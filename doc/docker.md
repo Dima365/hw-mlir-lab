@@ -94,13 +94,13 @@ make shell
 The cocotb pipeline writes an FST waveform:
 
 ```text
-tests/cocotb/systolic_array_demo/dump.fst
+tests/cocotb/dump.fst
 ```
 
 Open it on the host:
 
 ```bash
-surfer tests/cocotb/systolic_array_demo/dump.fst
+surfer tests/cocotb/dump.fst
 ```
 
 The wave viewer is intentionally not part of the Docker image.

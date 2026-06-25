@@ -1,0 +1,11 @@
+# IP block registry. Single source of truth:
+# opcode, RTL module name, sources, parameters.
+- name: matmul
+  module: array
+  sources:
+    - ip/systolic_array_demo/array.sv
+  opcode: 1
+  params:
+    N: 8
+    DATA_W: 8
+    ACC_W: 32

@@ -9,4 +9,4 @@ APP="${APP:-$OUT_DIR/app}"
 
 ./pipelines/compile_pipeline.sh "$OUT_DIR/08_llvm.ll" demo/main.c "$APP" "$OUT_DIR"
 
-PYTHON="$PYTHON" ./pipelines/cocotb_pipeline.sh "$APP"
+PYTHON="$PYTHON" ./pipelines/cocotb_pipeline.sh "$APP" matmul

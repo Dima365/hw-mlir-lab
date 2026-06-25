@@ -7,13 +7,17 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "accel_opcodes.h"
+
 #define SYSTOLIC_SOCKET_PATH "/tmp/systolic_cocotb.sock"
-#define SYSTOLIC_OPCODE_MATMUL_8X8 1u
+#define ACCEL_MAGIC 0x54535953u // "SYST" little-endian
 
 struct RequestHeader {
   uint32_t magic;
   uint32_t opcode;
-  uint32_t payload_bytes;
+  uint32_t param_bytes;
+  uint32_t in_bytes;
+  uint32_t out_bytes;
 };
 
 typedef struct {
@@ -93,6 +97,30 @@ static int get_connection(void) {
   return systolic_fd;
 }
 
+// Generic transport to the simulator: one call for any IP block.
+// Protocol: header -> params -> in -> (read back) out.
+static void accel_invoke(uint32_t opcode, const void *in, size_t in_bytes,
+                         void *out, size_t out_bytes, const void *params,
+                         size_t param_bytes) {
+  int fd = get_connection();
+
+  struct RequestHeader header = {
+      .magic = ACCEL_MAGIC,
+      .opcode = opcode,
+      .param_bytes = (uint32_t)param_bytes,
+      .in_bytes = (uint32_t)in_bytes,
+      .out_bytes = (uint32_t)out_bytes,
+  };
+
+  write_all(fd, &header, sizeof(header));
+  if (param_bytes)
+    write_all(fd, params, param_bytes);
+  if (in_bytes)
+    write_all(fd, in, in_bytes);
+  if (out_bytes)
+    read_all(fd, out, out_bytes);
+}
+
 static void check_8x8_i8_memref(const char *name, const MemRef2DI8 *memref) {
   if (memref->sizes[0] != 8 || memref->sizes[1] != 8) {
     fprintf(stderr, "systolic runtime: %s must be 8x8, got %ldx%ld\n", name,
@@ -159,18 +187,12 @@ void systolic_matmul_8x8(
   pack_i8_8x8(&b, b_buf);
   pack_i32_8x8(&c, c_buf);
 
-  int fd = get_connection();
+  // input = a(i8x64) || b(i8x64) || c_in(i32x64), output = c(i32x64)
+  uint8_t in[sizeof(a_buf) + sizeof(b_buf) + sizeof(c_buf)];
+  memcpy(in, a_buf, sizeof(a_buf));
+  memcpy(in + sizeof(a_buf), b_buf, sizeof(b_buf));
+  memcpy(in + sizeof(a_buf) + sizeof(b_buf), c_buf, sizeof(c_buf));
 
-  struct RequestHeader header;
-  header.magic = 0x54535953u; // "SYST" little-endian
-  header.opcode = SYSTOLIC_OPCODE_MATMUL_8X8;
-  header.payload_bytes = 2u * 64u * sizeof(int8_t) + 64u * sizeof(int32_t);
-
-  write_all(fd, &header, sizeof(header));
-  write_all(fd, a_buf, sizeof(a_buf));
-  write_all(fd, b_buf, sizeof(b_buf));
-  write_all(fd, c_buf, sizeof(c_buf));
-
-  read_all(fd, c_buf, sizeof(c_buf));
+  accel_invoke(OP_MATMUL, in, sizeof(in), c_buf, sizeof(c_buf), NULL, 0);
   unpack_i32_8x8(c_buf, &c);
 }

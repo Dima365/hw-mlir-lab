@@ -56,3 +56,9 @@ logs/
 .vscode/
 .idea/
 .DS_Store
+
+# Planning notes
+plan/
+
+# Generated framework artifacts
+interface/accel_opcodes.h
