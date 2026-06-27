@@ -59,12 +59,13 @@ class MatmulDriver(IPDriver):
         dut.c_in_flat.value = _pack_i32(c_in)
         dut.start.value = 1
         await RisingEdge(dut.clk)
+        await ReadWrite()
         dut.start.value = 0
 
         for _ in range(32):
             await RisingEdge(dut.clk)
+            await ReadOnly()
             if int(dut.done.value) == 1:
-                await ReadOnly()
                 c = _unpack_i32(int(dut.c_out_flat.value))
                 return struct.pack("<64i", *c)
 
