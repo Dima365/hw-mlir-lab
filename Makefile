@@ -1,4 +1,4 @@
-.PHONY: docker-build standalone demo test shell docker-config clean-generated clean-standalone
+.PHONY: docker-build standalone demo demo-epilogue test shell docker-config clean-generated clean-standalone
 
 docker-build:
 	docker compose build
@@ -8,6 +8,9 @@ standalone:
 
 demo: standalone
 	docker compose run --rm dev ./demo/run.sh
+
+demo-epilogue: standalone
+	docker compose run --rm dev ./demo/run_epilogue.sh
 
 test: standalone
 	docker compose run --rm dev python tests/run_matmul_tests.py

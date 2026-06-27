@@ -11,7 +11,11 @@ export IP
 
 TOPLEVEL := $(shell python3 ips.py toplevel $(IP))
 VERILOG_SOURCES := $(addprefix $(REPO_ROOT)/,$(shell python3 ips.py sources $(IP)))
-MODULE := test_socket
+MODULE ?= test_socket
+
+# Per-IP build dir so switching IP never reuses another IP's compiled DUT.
+# Stays under sim_build/.
+SIM_BUILD ?= sim_build/$(IP)
 
 # Drivers and the manifest loader live here; expose them to the harness.
 export PYTHONPATH := $(abspath .):$(PYTHONPATH)

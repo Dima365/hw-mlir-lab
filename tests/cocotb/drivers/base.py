@@ -24,3 +24,12 @@ class IPDriver:
         returns  -- output bytes sent back to the app (must be out_bytes long)
         """
         raise NotImplementedError
+
+    def smoke_cases(self):
+        """Optional no-MLIR contract-smoke cases for the driver<->IP seam.
+
+        Returns a list of (params, data_in, expected_out) byte triples; the
+        generic test_smoke harness feeds each through handle() and compares.
+        Empty by default (no smoke test for this IP).
+        """
+        return []

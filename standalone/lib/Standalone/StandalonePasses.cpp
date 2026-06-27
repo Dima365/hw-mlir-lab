@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/PatternMatch.h"
@@ -22,6 +23,7 @@ namespace mlir::standalone {
 #define GEN_PASS_DEF_STANDALONESWITCHBARFOO
 #define GEN_PASS_DEF_CONVERTLINALGMATMULTOSYSTOLIC
 #define GEN_PASS_DEF_LOWERSYSTOLICTOFUNCCALL
+#define GEN_PASS_DEF_LOWERREQUANTIZETOFUNCCALL
 #define GEN_PASS_DEF_CREATECINTERFACEENTRYWRAPPERS
 #include "Standalone/StandalonePasses.h.inc"
 
@@ -224,6 +226,58 @@ public:
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
     patterns.add<LowerSystolicMatmulToCall>(&getContext());
+
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
+// Framework helper: replace an accelerator op (no results) with a func.call to
+// runtime function `symbol`, declaring the private function on first use.
+// Reuse this from per-IP lowering passes so their pattern body stays tiny.
+static void lowerToRuntimeCall(Operation *op, StringRef symbol,
+                              ValueRange operands, PatternRewriter &rewriter) {
+  ModuleOp module = op->getParentOfType<ModuleOp>();
+  if (!module.lookupSymbol<func::FuncOp>(symbol)) {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(module.getBody());
+    auto fnType = rewriter.getFunctionType(operands.getTypes(), {});
+    auto fn = func::FuncOp::create(rewriter, op->getLoc(), symbol, fnType);
+    fn.setPrivate();
+  }
+  rewriter.replaceOpWithNewOp<func::CallOp>(op, symbol, TypeRange{}, operands);
+}
+
+class LowerRequantizeToCall
+    : public OpRewritePattern<standalone::RequantizeOp> {
+public:
+  using OpRewritePattern<standalone::RequantizeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(standalone::RequantizeOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value mult = arith::ConstantOp::create(rewriter, loc, op.getMultAttr());
+    Value shift = arith::ConstantOp::create(rewriter, loc, op.getShiftAttr());
+    Value zeroPoint =
+        arith::ConstantOp::create(rewriter, loc, op.getZeroPointAttr());
+
+    lowerToRuntimeCall(
+        op, "epilogue_8x8",
+        ValueRange{op.getAcc(), op.getOut(), mult, shift, zeroPoint}, rewriter);
+
+    return success();
+  }
+};
+
+class LowerRequantizeToFuncCall
+    : public impl::LowerRequantizeToFuncCallBase<LowerRequantizeToFuncCall> {
+public:
+  using impl::LowerRequantizeToFuncCallBase<
+      LowerRequantizeToFuncCall>::LowerRequantizeToFuncCallBase;
+
+  void runOnOperation() final {
+    RewritePatternSet patterns(&getContext());
+    patterns.add<LowerRequantizeToCall>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();

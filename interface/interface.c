@@ -158,6 +158,13 @@ static void unpack_i32_8x8(const int32_t src[64], MemRef2DI32 *dst) {
       base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
 }
 
+static void unpack_i8_8x8(const int8_t src[64], MemRef2DI8 *dst) {
+  int8_t *base = dst->aligned + dst->offset;
+  for (int64_t i = 0; i < 8; ++i)
+    for (int64_t j = 0; j < 8; ++j)
+      base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
+}
+
 void systolic_matmul_8x8(
     int8_t *a_allocated, int8_t *a_aligned, int64_t a_offset, int64_t a_size0,
     int64_t a_size1, int64_t a_stride0, int64_t a_stride1,
@@ -195,4 +202,34 @@ void systolic_matmul_8x8(
 
   accel_invoke(OP_MATMUL, in, sizeof(in), c_buf, sizeof(c_buf), NULL, 0);
   unpack_i32_8x8(c_buf, &c);
+}
+
+void epilogue_8x8(
+    int32_t *acc_allocated, int32_t *acc_aligned, int64_t acc_offset,
+    int64_t acc_size0, int64_t acc_size1, int64_t acc_stride0,
+    int64_t acc_stride1,
+    int8_t *out_allocated, int8_t *out_aligned, int64_t out_offset,
+    int64_t out_size0, int64_t out_size1, int64_t out_stride0,
+    int64_t out_stride1,
+    int32_t mult, int32_t shift, int32_t zero_point) {
+  MemRef2DI32 acc = {acc_allocated, acc_aligned, acc_offset,
+                     {acc_size0, acc_size1},
+                     {acc_stride0, acc_stride1}};
+  MemRef2DI8 out = {out_allocated, out_aligned, out_offset,
+                    {out_size0, out_size1},
+                    {out_stride0, out_stride1}};
+
+  check_8x8_i32_memref("acc", &acc);
+  check_8x8_i8_memref("out", &out);
+
+  int32_t acc_buf[64];
+  int8_t out_buf[64];
+  pack_i32_8x8(&acc, acc_buf);
+
+  // params = mult, shift, zero_point (3 x i32)
+  int32_t params[3] = {mult, shift, zero_point};
+
+  accel_invoke(OP_EPILOGUE, acc_buf, sizeof(acc_buf), out_buf, sizeof(out_buf),
+               params, sizeof(params));
+  unpack_i8_8x8(out_buf, &out);
 }

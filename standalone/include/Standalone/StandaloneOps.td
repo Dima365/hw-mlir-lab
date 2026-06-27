@@ -13,6 +13,7 @@ include "Standalone/StandaloneTypes.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/IR/CommonTypeConstraints.td"
+include "mlir/IR/CommonAttrConstraints.td"
 
 def Standalone_FooOp : Standalone_Op<"foo", [Pure,
                                              SameOperandsAndResultType]> {
@@ -54,6 +55,25 @@ def Standalone_SystolicMatmulOp
   let assemblyFormat = [{
     `ins` `(` $lhs `,` $rhs `:` type($lhs) `,` type($rhs) `)`
     `outs` `(` $acc `:` type($acc) `)`
+    attr-dict
+  }];
+}
+
+def Standalone_RequantizeOp
+    : Standalone_Op<"requantize"> {
+  let summary = "8x8 per-tensor requantize + ReLU (i32 -> i8) on memrefs";
+
+  let arguments = (ins
+    Arg<AnyMemRef, "", [MemRead]>:$acc,
+    Arg<AnyMemRef, "", [MemWrite]>:$out,
+    I32Attr:$mult,
+    I32Attr:$shift,
+    I32Attr:$zero_point
+  );
+
+  let assemblyFormat = [{
+    `ins` `(` $acc `:` type($acc) `)`
+    `outs` `(` $out `:` type($out) `)`
     attr-dict
   }];
 }

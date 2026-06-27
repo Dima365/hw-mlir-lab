@@ -9,3 +9,13 @@
     N: 8
     DATA_W: 8
     ACC_W: 32
+
+- name: epilogue
+  module: epilogue
+  sources:
+    - ip/epilogue_demo/epilogue.sv
+  opcode: 2
+  params:
+    N: 8
+    ACC_W: 32
+    OUT_W: 8

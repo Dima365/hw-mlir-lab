@@ -45,6 +45,20 @@ def LowerSystolicToFuncCall
   ];
 }
 
+def LowerRequantizeToFuncCall
+    : Pass<"lower-requantize-to-func-call", "mlir::ModuleOp"> {
+  let summary = "Lower standalone.requantize to the epilogue runtime call";
+  let description = [{
+    Replaces standalone.requantize with a func.call to the epilogue_8x8 runtime
+    function; the mult/shift/zero_point attributes become arith.constant operands.
+  }];
+
+  let dependentDialects = [
+    "mlir::func::FuncDialect",
+    "mlir::arith::ArithDialect"
+  ];
+}
+
 def CreateCInterfaceEntryWrappers
     : Pass<"create-c-interface-entry-wrappers", "mlir::ModuleOp"> {
   let summary = "Create C interface entry wrappers for public memref functions";
