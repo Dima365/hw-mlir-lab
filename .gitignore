@@ -62,3 +62,5 @@ plan/
 
 # Generated framework artifacts
 interface/accel_opcodes.h
+
+AGENTS.md
