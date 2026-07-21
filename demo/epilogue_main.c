@@ -19,12 +19,24 @@ typedef struct {
 
 extern void _mlir_ciface_requant_entry(MemRef2DI32 *acc, MemRef2DI8 *out);
 
-// Golden: per-tensor requantize + ReLU, round half up.
+// Golden: per-tensor requantize + ReLU, round to nearest ties to even.
 // Must match the attributes in demo/epilogue.mlir and the RTL/driver.
+static int64_t round_shift_rne(int64_t value, int32_t shift) {
+  if (shift == 0)
+    return value;
+
+  uint64_t magnitude = value < 0 ? (uint64_t)(-value) : (uint64_t)value;
+  uint64_t quotient = magnitude >> shift;
+  uint64_t remainder = magnitude & (((uint64_t)1 << shift) - 1);
+  uint64_t half = (uint64_t)1 << (shift - 1);
+  if (remainder > half || (remainder == half && (quotient & 1)))
+    ++quotient;
+  return value < 0 ? -(int64_t)quotient : (int64_t)quotient;
+}
+
 static int32_t requantize(int32_t c, int32_t mult, int32_t shift, int32_t zp) {
   int64_t prod = (int64_t)c * (int64_t)mult;
-  int64_t round_add = shift > 0 ? ((int64_t)1 << (shift - 1)) : 0;
-  int64_t q = ((prod + round_add) >> shift) + zp;
+  int64_t q = round_shift_rne(prod, shift) + zp;
   if (q < 0)
     q = 0;
   if (q > 127)
