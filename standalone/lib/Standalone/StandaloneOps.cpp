@@ -14,6 +14,50 @@
 
 using namespace mlir;
 
+static bool is8x8IntegerMemRef(Type type, unsigned width) {
+  auto memrefType = dyn_cast<MemRefType>(type);
+  return memrefType && memrefType.getRank() == 2 &&
+         memrefType.getDimSize(0) == 8 &&
+         memrefType.getDimSize(1) == 8 &&
+         memrefType.getElementType().isInteger(width);
+}
+
+LogicalResult standalone::QAddReluOp::verify() {
+  if (!is8x8IntegerMemRef(getLhs().getType(), 8))
+    return emitOpError("requires lhs to be memref<8x8xi8>");
+  if (!is8x8IntegerMemRef(getRhs().getType(), 8))
+    return emitOpError("requires rhs to be memref<8x8xi8>");
+  if (!is8x8IntegerMemRef(getOut().getType(), 8))
+    return emitOpError("requires out to be memref<8x8xi8>");
+
+  if (getLhsMultiplierAttr().getInt() < 0 ||
+      getRhsMultiplierAttr().getInt() < 0) {
+    return emitOpError("requires non-negative multipliers");
+  }
+
+  int64_t shift = getShiftAttr().getInt();
+  if (shift < 0 || shift > 63)
+    return emitOpError("requires shift in [0, 63]");
+
+  int64_t lhsZeroPoint = getLhsZeroPointAttr().getInt();
+  if (lhsZeroPoint < 0 || lhsZeroPoint > 255)
+    return emitOpError("requires lhs_zero_point in [0, 255]");
+
+  int64_t rhsZeroPoint = getRhsZeroPointAttr().getInt();
+  if (rhsZeroPoint < 0 || rhsZeroPoint > 255)
+    return emitOpError("requires rhs_zero_point in [0, 255]");
+
+  int64_t outputZeroPoint = getOutputZeroPointAttr().getInt();
+  if (outputZeroPoint < 0 || outputZeroPoint > 255)
+    return emitOpError("requires output_zero_point in [0, 255]");
+
+  int64_t reluEnable = getReluEnableAttr().getInt();
+  if (reluEnable != 0 && reluEnable != 1)
+    return emitOpError("requires relu_enable to be 0 or 1");
+
+  return success();
+}
+
 LogicalResult standalone::ConvRequantOp::verify() {
   auto accType = dyn_cast<MemRefType>(getAcc().getType());
   if (!accType || accType.getShape() != ArrayRef<int64_t>({8, 8}) ||

@@ -1,4 +1,4 @@
-module @onnx_epilogue_transforms
+module @onnx_qadd_relu_transforms
     attributes {transform.with_named_sequence} {
 
   transform.named_sequence @__transform_main(

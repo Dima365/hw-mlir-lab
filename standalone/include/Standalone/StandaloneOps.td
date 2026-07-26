@@ -59,23 +59,36 @@ def Standalone_SystolicMatmulOp
   }];
 }
 
-def Standalone_RequantizeOp
-    : Standalone_Op<"requantize"> {
-  let summary = "8x8 per-tensor requantize + ReLU (i32 -> i8) on memrefs";
+def Standalone_QAddReluOp
+    : Standalone_Op<"qadd_relu"> {
+  let summary = "8x8 quantized residual add with optional ReLU";
+  let description = [{
+    Adds two per-tensor uint8 activation tiles. Each input is centered by its
+    zero point and scaled into a shared fixed-point domain. The wide sum is
+    rounded once, optionally clamped by ReLU, and saturated into the output
+    per-tensor uint8 domain.
+  }];
 
   let arguments = (ins
-    Arg<AnyMemRef, "", [MemRead]>:$acc,
+    Arg<AnyMemRef, "", [MemRead]>:$lhs,
+    Arg<AnyMemRef, "", [MemRead]>:$rhs,
     Arg<AnyMemRef, "", [MemWrite]>:$out,
-    I32Attr:$mult,
+    I32Attr:$lhs_multiplier,
+    I32Attr:$rhs_multiplier,
     I32Attr:$shift,
-    I32Attr:$zero_point
+    I32Attr:$lhs_zero_point,
+    I32Attr:$rhs_zero_point,
+    I32Attr:$output_zero_point,
+    I32Attr:$relu_enable
   );
 
   let assemblyFormat = [{
-    `ins` `(` $acc `:` type($acc) `)`
+    `ins` `(` $lhs `,` $rhs `:` type($lhs) `,` type($rhs) `)`
     `outs` `(` $out `:` type($out) `)`
     attr-dict
   }];
+
+  let hasVerifier = 1;
 }
 
 def Standalone_ConvRequantOp

@@ -189,15 +189,15 @@ static void pack_i32_8(const MemRef1DI32 *src, int32_t dst[8]) {
     dst[i] = base[i * src->strides[0]];
 }
 
-static void unpack_i32_8x8(const int32_t src[64], MemRef2DI32 *dst) {
-  int32_t *base = dst->aligned + dst->offset;
+static void pack_u8_8x8(const MemRef2DU8 *src, uint8_t dst[64]) {
+  uint8_t *base = src->aligned + src->offset;
   for (int64_t i = 0; i < 8; ++i)
     for (int64_t j = 0; j < 8; ++j)
-      base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
+      dst[i * 8 + j] = base[i * src->strides[0] + j * src->strides[1]];
 }
 
-static void unpack_i8_8x8(const int8_t src[64], MemRef2DI8 *dst) {
-  int8_t *base = dst->aligned + dst->offset;
+static void unpack_i32_8x8(const int32_t src[64], MemRef2DI32 *dst) {
+  int32_t *base = dst->aligned + dst->offset;
   for (int64_t i = 0; i < 8; ++i)
     for (int64_t j = 0; j < 8; ++j)
       base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
@@ -249,34 +249,69 @@ void systolic_matmul_8x8(
   unpack_i32_8x8(c_buf, &c);
 }
 
-void epilogue_8x8(
-    int32_t *acc_allocated, int32_t *acc_aligned, int64_t acc_offset,
-    int64_t acc_size0, int64_t acc_size1, int64_t acc_stride0,
-    int64_t acc_stride1,
-    int8_t *out_allocated, int8_t *out_aligned, int64_t out_offset,
+void qadd_relu_8x8(
+    uint8_t *lhs_allocated, uint8_t *lhs_aligned, int64_t lhs_offset,
+    int64_t lhs_size0, int64_t lhs_size1, int64_t lhs_stride0,
+    int64_t lhs_stride1,
+    uint8_t *rhs_allocated, uint8_t *rhs_aligned, int64_t rhs_offset,
+    int64_t rhs_size0, int64_t rhs_size1, int64_t rhs_stride0,
+    int64_t rhs_stride1,
+    uint8_t *out_allocated, uint8_t *out_aligned, int64_t out_offset,
     int64_t out_size0, int64_t out_size1, int64_t out_stride0,
     int64_t out_stride1,
-    int32_t mult, int32_t shift, int32_t zero_point) {
-  MemRef2DI32 acc = {acc_allocated, acc_aligned, acc_offset,
-                     {acc_size0, acc_size1},
-                     {acc_stride0, acc_stride1}};
-  MemRef2DI8 out = {out_allocated, out_aligned, out_offset,
+    int32_t lhs_multiplier, int32_t rhs_multiplier, int32_t shift,
+    int32_t lhs_zero_point, int32_t rhs_zero_point,
+    int32_t output_zero_point, int32_t relu_enable) {
+  MemRef2DU8 lhs = {lhs_allocated, lhs_aligned, lhs_offset,
+                    {lhs_size0, lhs_size1},
+                    {lhs_stride0, lhs_stride1}};
+  MemRef2DU8 rhs = {rhs_allocated, rhs_aligned, rhs_offset,
+                    {rhs_size0, rhs_size1},
+                    {rhs_stride0, rhs_stride1}};
+  MemRef2DU8 out = {out_allocated, out_aligned, out_offset,
                     {out_size0, out_size1},
                     {out_stride0, out_stride1}};
 
-  check_8x8_i32_memref("acc", &acc);
-  check_8x8_i8_memref("out", &out);
+  check_8x8_u8_memref("lhs", &lhs);
+  check_8x8_u8_memref("rhs", &rhs);
+  check_8x8_u8_memref("out", &out);
 
-  int32_t acc_buf[64];
-  int8_t out_buf[64];
-  pack_i32_8x8(&acc, acc_buf);
+  if (lhs_multiplier < 0 || rhs_multiplier < 0) {
+    fprintf(stderr, "systolic runtime: QADD multipliers must be non-negative\n");
+    abort();
+  }
+  if (shift < 0 || shift > 63) {
+    fprintf(stderr, "systolic runtime: QADD shift must be in [0, 63]\n");
+    abort();
+  }
+  if (lhs_zero_point < 0 || lhs_zero_point > UINT8_MAX ||
+      rhs_zero_point < 0 || rhs_zero_point > UINT8_MAX ||
+      output_zero_point < 0 || output_zero_point > UINT8_MAX) {
+    fprintf(stderr, "systolic runtime: QADD zero points must be uint8\n");
+    abort();
+  }
+  if (relu_enable != 0 && relu_enable != 1) {
+    fprintf(stderr, "systolic runtime: QADD relu_enable must be 0 or 1\n");
+    abort();
+  }
 
-  // params = mult, shift, zero_point (3 x i32)
-  int32_t params[3] = {mult, shift, zero_point};
+  uint8_t lhs_buf[64];
+  uint8_t rhs_buf[64];
+  uint8_t out_buf[64];
+  pack_u8_8x8(&lhs, lhs_buf);
+  pack_u8_8x8(&rhs, rhs_buf);
 
-  accel_invoke(OP_EPILOGUE, acc_buf, sizeof(acc_buf), out_buf, sizeof(out_buf),
-               params, sizeof(params));
-  unpack_i8_8x8(out_buf, &out);
+  uint8_t in[sizeof(lhs_buf) + sizeof(rhs_buf)];
+  memcpy(in, lhs_buf, sizeof(lhs_buf));
+  memcpy(in + sizeof(lhs_buf), rhs_buf, sizeof(rhs_buf));
+
+  int32_t params[7] = {
+      lhs_multiplier,   rhs_multiplier,    shift,      lhs_zero_point,
+      rhs_zero_point,   output_zero_point, relu_enable};
+
+  accel_invoke(OP_QADD_RELU, in, sizeof(in), out_buf, sizeof(out_buf), params,
+               sizeof(params));
+  unpack_u8_8x8(out_buf, &out);
 }
 
 void conv_requant_8x8(

@@ -10,15 +10,16 @@
     DATA_W: 8
     ACC_W: 32
 
-- name: epilogue
-  module: epilogue
+- name: qadd_relu
+  module: qadd_relu
   sources:
-    - ip/epilogue_demo/epilogue.sv
+    - ip/qadd_relu_demo/qadd_relu.sv
   opcode: 2
   params:
     N: 8
-    ACC_W: 32
-    OUT_W: 8
+    DATA_W: 8
+    PARAM_W: 32
+    SHIFT_W: 6
 
 - name: conv_requant
   module: conv_requant

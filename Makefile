@@ -1,4 +1,4 @@
-.PHONY: docker-build standalone demo demo-epilogue demo-conv-requant test shell docker-config clean-generated clean-standalone
+.PHONY: docker-build standalone demo demo-qadd-relu demo-conv-requant test shell docker-config clean-generated clean-standalone
 
 docker-build:
 	docker compose build
@@ -9,8 +9,8 @@ standalone:
 demo: standalone
 	docker compose run --rm dev ./demo/run.sh
 
-demo-epilogue: standalone
-	docker compose run --rm dev ./demo/run_epilogue.sh
+demo-qadd-relu: standalone
+	docker compose run --rm dev ./demo/run_qadd_relu.sh
 
 demo-conv-requant: standalone
 	docker compose run --rm dev ./demo/run_conv_requant.sh

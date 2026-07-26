@@ -23,7 +23,7 @@ namespace mlir::standalone {
 #define GEN_PASS_DEF_STANDALONESWITCHBARFOO
 #define GEN_PASS_DEF_CONVERTLINALGMATMULTOSYSTOLIC
 #define GEN_PASS_DEF_LOWERSYSTOLICTOFUNCCALL
-#define GEN_PASS_DEF_LOWERREQUANTIZETOFUNCCALL
+#define GEN_PASS_DEF_LOWERQADDRELUTOFUNCCALL
 #define GEN_PASS_DEF_LOWERCONVREQUANTTOFUNCCALL
 #define GEN_PASS_DEF_CREATECINTERFACEENTRYWRAPPERS
 #include "Standalone/StandalonePasses.h.inc"
@@ -249,36 +249,48 @@ static void lowerToRuntimeCall(Operation *op, StringRef symbol,
   rewriter.replaceOpWithNewOp<func::CallOp>(op, symbol, TypeRange{}, operands);
 }
 
-class LowerRequantizeToCall
-    : public OpRewritePattern<standalone::RequantizeOp> {
+class LowerQAddReluToCall
+    : public OpRewritePattern<standalone::QAddReluOp> {
 public:
-  using OpRewritePattern<standalone::RequantizeOp>::OpRewritePattern;
+  using OpRewritePattern<standalone::QAddReluOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(standalone::RequantizeOp op,
+  LogicalResult matchAndRewrite(standalone::QAddReluOp op,
                                 PatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Value mult = arith::ConstantOp::create(rewriter, loc, op.getMultAttr());
+    Value lhsMultiplier =
+        arith::ConstantOp::create(rewriter, loc, op.getLhsMultiplierAttr());
+    Value rhsMultiplier =
+        arith::ConstantOp::create(rewriter, loc, op.getRhsMultiplierAttr());
     Value shift = arith::ConstantOp::create(rewriter, loc, op.getShiftAttr());
-    Value zeroPoint =
-        arith::ConstantOp::create(rewriter, loc, op.getZeroPointAttr());
+    Value lhsZeroPoint =
+        arith::ConstantOp::create(rewriter, loc, op.getLhsZeroPointAttr());
+    Value rhsZeroPoint =
+        arith::ConstantOp::create(rewriter, loc, op.getRhsZeroPointAttr());
+    Value outputZeroPoint =
+        arith::ConstantOp::create(rewriter, loc, op.getOutputZeroPointAttr());
+    Value reluEnable =
+        arith::ConstantOp::create(rewriter, loc, op.getReluEnableAttr());
 
     lowerToRuntimeCall(
-        op, "epilogue_8x8",
-        ValueRange{op.getAcc(), op.getOut(), mult, shift, zeroPoint}, rewriter);
+        op, "qadd_relu_8x8",
+        ValueRange{op.getLhs(), op.getRhs(), op.getOut(), lhsMultiplier,
+                   rhsMultiplier, shift, lhsZeroPoint, rhsZeroPoint,
+                   outputZeroPoint, reluEnable},
+        rewriter);
 
     return success();
   }
 };
 
-class LowerRequantizeToFuncCall
-    : public impl::LowerRequantizeToFuncCallBase<LowerRequantizeToFuncCall> {
+class LowerQAddReluToFuncCall
+    : public impl::LowerQAddReluToFuncCallBase<LowerQAddReluToFuncCall> {
 public:
-  using impl::LowerRequantizeToFuncCallBase<
-      LowerRequantizeToFuncCall>::LowerRequantizeToFuncCallBase;
+  using impl::LowerQAddReluToFuncCallBase<
+      LowerQAddReluToFuncCall>::LowerQAddReluToFuncCallBase;
 
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
-    patterns.add<LowerRequantizeToCall>(&getContext());
+    patterns.add<LowerQAddReluToCall>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();

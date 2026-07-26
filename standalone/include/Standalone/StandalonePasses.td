@@ -45,12 +45,12 @@ def LowerSystolicToFuncCall
   ];
 }
 
-def LowerRequantizeToFuncCall
-    : Pass<"lower-requantize-to-func-call", "mlir::ModuleOp"> {
-  let summary = "Lower standalone.requantize to the epilogue runtime call";
+def LowerQAddReluToFuncCall
+    : Pass<"lower-qadd-relu-to-func-call", "mlir::ModuleOp"> {
+  let summary = "Lower standalone.qadd_relu to its simulator runtime call";
   let description = [{
-    Replaces standalone.requantize with a func.call to the epilogue_8x8 runtime
-    function; the mult/shift/zero_point attributes become arith.constant operands.
+    Replaces standalone.qadd_relu with a func.call to the qadd_relu_8x8 runtime
+    function. Quantization attributes become arith.constant operands.
   }];
 
   let dependentDialects = [
