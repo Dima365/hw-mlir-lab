@@ -19,3 +19,14 @@
     N: 8
     ACC_W: 32
     OUT_W: 8
+
+- name: conv_requant
+  module: conv_requant
+  sources:
+    - ip/conv_requant_demo/conv_requant.sv
+  opcode: 3
+  params:
+    N: 8
+    ACC_W: 32
+    OUT_W: 8
+    SHIFT_W: 6

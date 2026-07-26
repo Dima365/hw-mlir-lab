@@ -24,6 +24,7 @@ namespace mlir::standalone {
 #define GEN_PASS_DEF_CONVERTLINALGMATMULTOSYSTOLIC
 #define GEN_PASS_DEF_LOWERSYSTOLICTOFUNCCALL
 #define GEN_PASS_DEF_LOWERREQUANTIZETOFUNCCALL
+#define GEN_PASS_DEF_LOWERCONVREQUANTTOFUNCCALL
 #define GEN_PASS_DEF_CREATECINTERFACEENTRYWRAPPERS
 #include "Standalone/StandalonePasses.h.inc"
 
@@ -278,6 +279,45 @@ public:
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
     patterns.add<LowerRequantizeToCall>(&getContext());
+
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
+class LowerConvRequantToCall
+    : public OpRewritePattern<standalone::ConvRequantOp> {
+public:
+  using OpRewritePattern<standalone::ConvRequantOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(standalone::ConvRequantOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value outputZeroPoint =
+        arith::ConstantOp::create(rewriter, loc, op.getOutputZeroPointAttr());
+    Value reluEnable =
+        arith::ConstantOp::create(rewriter, loc, op.getReluEnableAttr());
+
+    lowerToRuntimeCall(
+        op, "conv_requant_8x8",
+        ValueRange{op.getAcc(), op.getMultiplier(), op.getShift(), op.getOut(),
+                   outputZeroPoint, reluEnable},
+        rewriter);
+
+    return success();
+  }
+};
+
+class LowerConvRequantToFuncCall
+    : public impl::LowerConvRequantToFuncCallBase<
+          LowerConvRequantToFuncCall> {
+public:
+  using impl::LowerConvRequantToFuncCallBase<
+      LowerConvRequantToFuncCall>::LowerConvRequantToFuncCallBase;
+
+  void runOnOperation() final {
+    RewritePatternSet patterns(&getContext());
+    patterns.add<LowerConvRequantToCall>(&getContext());
 
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();

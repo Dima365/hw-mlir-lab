@@ -59,6 +59,21 @@ def LowerRequantizeToFuncCall
   ];
 }
 
+def LowerConvRequantToFuncCall
+    : Pass<"lower-conv-requant-to-func-call", "mlir::ModuleOp"> {
+  let summary = "Lower standalone.conv_requant to its simulator runtime call";
+  let description = [{
+    Replaces standalone.conv_requant with a func.call to the
+    conv_requant_8x8 runtime function. Scalar attributes become arith.constant
+    operands; per-channel multiplier and shift values remain memref operands.
+  }];
+
+  let dependentDialects = [
+    "mlir::func::FuncDialect",
+    "mlir::arith::ArithDialect"
+  ];
+}
+
 def CreateCInterfaceEntryWrappers
     : Pass<"create-c-interface-entry-wrappers", "mlir::ModuleOp"> {
   let summary = "Create C interface entry wrappers for public memref functions";

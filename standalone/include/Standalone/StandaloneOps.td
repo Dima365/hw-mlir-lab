@@ -78,4 +78,33 @@ def Standalone_RequantizeOp
   }];
 }
 
+def Standalone_ConvRequantOp
+    : Standalone_Op<"conv_requant"> {
+  let summary = "8x8 per-output-channel Conv requantization";
+  let description = [{
+    Requantizes an 8x8 tile of final i32 Conv accumulators to a per-tensor
+    uint8 activation domain. Rows are spatial positions and columns are output
+    channels. The multiplier and shift memrefs contain one fixed-point pair per
+    output-channel column.
+  }];
+
+  let arguments = (ins
+    Arg<AnyMemRef, "", [MemRead]>:$acc,
+    Arg<AnyMemRef, "", [MemRead]>:$multiplier,
+    Arg<AnyMemRef, "", [MemRead]>:$shift,
+    Arg<AnyMemRef, "", [MemWrite]>:$out,
+    I32Attr:$output_zero_point,
+    I32Attr:$relu_enable
+  );
+
+  let assemblyFormat = [{
+    `ins` `(` $acc `,` $multiplier `,` $shift `:`
+      type($acc) `,` type($multiplier) `,` type($shift) `)`
+    `outs` `(` $out `:` type($out) `)`
+    attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
 #endif // STANDALONE_OPS

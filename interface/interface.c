@@ -36,6 +36,22 @@ typedef struct {
   int64_t strides[2];
 } MemRef2DI32;
 
+typedef struct {
+  int32_t *allocated;
+  int32_t *aligned;
+  int64_t offset;
+  int64_t sizes[1];
+  int64_t strides[1];
+} MemRef1DI32;
+
+typedef struct {
+  uint8_t *allocated;
+  uint8_t *aligned;
+  int64_t offset;
+  int64_t sizes[2];
+  int64_t strides[2];
+} MemRef2DU8;
+
 static int systolic_fd = -1;
 
 static void die(const char *msg) {
@@ -137,6 +153,22 @@ static void check_8x8_i32_memref(const char *name, const MemRef2DI32 *memref) {
   }
 }
 
+static void check_8_i32_memref(const char *name, const MemRef1DI32 *memref) {
+  if (memref->sizes[0] != 8) {
+    fprintf(stderr, "systolic runtime: %s must have 8 elements, got %ld\n",
+            name, (long)memref->sizes[0]);
+    abort();
+  }
+}
+
+static void check_8x8_u8_memref(const char *name, const MemRef2DU8 *memref) {
+  if (memref->sizes[0] != 8 || memref->sizes[1] != 8) {
+    fprintf(stderr, "systolic runtime: %s must be 8x8, got %ldx%ld\n", name,
+            (long)memref->sizes[0], (long)memref->sizes[1]);
+    abort();
+  }
+}
+
 static void pack_i8_8x8(const MemRef2DI8 *src, int8_t dst[64]) {
   int8_t *base = src->aligned + src->offset;
   for (int64_t i = 0; i < 8; ++i)
@@ -151,6 +183,12 @@ static void pack_i32_8x8(const MemRef2DI32 *src, int32_t dst[64]) {
       dst[i * 8 + j] = base[i * src->strides[0] + j * src->strides[1]];
 }
 
+static void pack_i32_8(const MemRef1DI32 *src, int32_t dst[8]) {
+  int32_t *base = src->aligned + src->offset;
+  for (int64_t i = 0; i < 8; ++i)
+    dst[i] = base[i * src->strides[0]];
+}
+
 static void unpack_i32_8x8(const int32_t src[64], MemRef2DI32 *dst) {
   int32_t *base = dst->aligned + dst->offset;
   for (int64_t i = 0; i < 8; ++i)
@@ -160,6 +198,13 @@ static void unpack_i32_8x8(const int32_t src[64], MemRef2DI32 *dst) {
 
 static void unpack_i8_8x8(const int8_t src[64], MemRef2DI8 *dst) {
   int8_t *base = dst->aligned + dst->offset;
+  for (int64_t i = 0; i < 8; ++i)
+    for (int64_t j = 0; j < 8; ++j)
+      base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
+}
+
+static void unpack_u8_8x8(const uint8_t src[64], MemRef2DU8 *dst) {
+  uint8_t *base = dst->aligned + dst->offset;
   for (int64_t i = 0; i < 8; ++i)
     for (int64_t j = 0; j < 8; ++j)
       base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
@@ -232,4 +277,65 @@ void epilogue_8x8(
   accel_invoke(OP_EPILOGUE, acc_buf, sizeof(acc_buf), out_buf, sizeof(out_buf),
                params, sizeof(params));
   unpack_i8_8x8(out_buf, &out);
+}
+
+void conv_requant_8x8(
+    int32_t *acc_allocated, int32_t *acc_aligned, int64_t acc_offset,
+    int64_t acc_size0, int64_t acc_size1, int64_t acc_stride0,
+    int64_t acc_stride1,
+    int32_t *mult_allocated, int32_t *mult_aligned, int64_t mult_offset,
+    int64_t mult_size0, int64_t mult_stride0,
+    int32_t *shift_allocated, int32_t *shift_aligned, int64_t shift_offset,
+    int64_t shift_size0, int64_t shift_stride0,
+    uint8_t *out_allocated, uint8_t *out_aligned, int64_t out_offset,
+    int64_t out_size0, int64_t out_size1, int64_t out_stride0,
+    int64_t out_stride1,
+    int32_t output_zero_point, int32_t relu_enable) {
+  MemRef2DI32 acc = {acc_allocated, acc_aligned, acc_offset,
+                     {acc_size0, acc_size1},
+                     {acc_stride0, acc_stride1}};
+  MemRef1DI32 multiplier = {mult_allocated, mult_aligned, mult_offset,
+                            {mult_size0}, {mult_stride0}};
+  MemRef1DI32 shift = {shift_allocated, shift_aligned, shift_offset,
+                       {shift_size0}, {shift_stride0}};
+  MemRef2DU8 out = {out_allocated, out_aligned, out_offset,
+                    {out_size0, out_size1},
+                    {out_stride0, out_stride1}};
+
+  check_8x8_i32_memref("acc", &acc);
+  check_8_i32_memref("multiplier", &multiplier);
+  check_8_i32_memref("shift", &shift);
+  check_8x8_u8_memref("out", &out);
+
+  if (output_zero_point < 0 || output_zero_point > UINT8_MAX) {
+    fprintf(stderr,
+            "systolic runtime: output_zero_point must be in [0, 255]\n");
+    abort();
+  }
+  if (relu_enable != 0 && relu_enable != 1) {
+    fprintf(stderr, "systolic runtime: relu_enable must be 0 or 1\n");
+    abort();
+  }
+
+  int32_t acc_buf[64];
+  int32_t params[18];
+  uint8_t out_buf[64];
+  pack_i32_8x8(&acc, acc_buf);
+  pack_i32_8(&multiplier, &params[0]);
+  pack_i32_8(&shift, &params[8]);
+  params[16] = output_zero_point;
+  params[17] = relu_enable;
+
+  for (int i = 0; i < 8; ++i) {
+    if (params[i] < 0 || params[8 + i] < 0 || params[8 + i] > 63) {
+      fprintf(stderr,
+              "systolic runtime: invalid multiplier/shift for channel %d\n",
+              i);
+      abort();
+    }
+  }
+
+  accel_invoke(OP_CONV_REQUANT, acc_buf, sizeof(acc_buf), out_buf,
+               sizeof(out_buf), params, sizeof(params));
+  unpack_u8_8x8(out_buf, &out);
 }

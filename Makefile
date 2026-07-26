@@ -1,4 +1,4 @@
-.PHONY: docker-build standalone demo demo-epilogue test shell docker-config clean-generated clean-standalone
+.PHONY: docker-build standalone demo demo-epilogue demo-conv-requant test shell docker-config clean-generated clean-standalone
 
 docker-build:
 	docker compose build
@@ -11,6 +11,9 @@ demo: standalone
 
 demo-epilogue: standalone
 	docker compose run --rm dev ./demo/run_epilogue.sh
+
+demo-conv-requant: standalone
+	docker compose run --rm dev ./demo/run_conv_requant.sh
 
 test: standalone
 	docker compose run --rm dev python tests/run_matmul_tests.py
