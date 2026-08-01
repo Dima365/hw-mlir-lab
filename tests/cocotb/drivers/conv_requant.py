@@ -40,6 +40,15 @@ def fixed_point_params(real_multiplier, max_shift=31):
     for shift in range(max_shift, -1, -1):
         multiplier = round(real_multiplier * (1 << shift))
         if 0 <= multiplier <= 0x7FFFFFFF:
+            step = 1.0 / (1 << shift)
+            error_bound = 0.5 * step
+            approximation_error = abs(
+                real_multiplier - multiplier * step
+            )
+            if approximation_error > error_bound + 1e-15:
+                raise ArithmeticError(
+                    "fixed-point approximation is invalid"
+                )
             return multiplier, shift
     raise ValueError(f"real multiplier {real_multiplier} does not fit signed i32")
 
