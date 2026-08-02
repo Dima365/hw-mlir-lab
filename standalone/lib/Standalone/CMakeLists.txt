@@ -3,6 +3,7 @@ add_mlir_dialect_library(MLIRStandalone
         StandaloneDialect.cpp
         StandaloneOps.cpp
         StandalonePasses.cpp
+        StandaloneTransformOps.cpp
 
         ADDITIONAL_HEADER_DIRS
         ${PROJECT_SOURCE_DIR}/include/Standalone
@@ -10,6 +11,7 @@ add_mlir_dialect_library(MLIRStandalone
         DEPENDS
         MLIRStandaloneOpsIncGen
         MLIRStandalonePassesIncGen
+        MLIRStandaloneTransformOpsIncGen
 
         LINK_LIBS PUBLIC
         MLIRIR
@@ -19,4 +21,7 @@ add_mlir_dialect_library(MLIRStandalone
         MLIRLinalgDialect
         MLIRMemRefDialect
         MLIRTensorDialect
+        MLIRTransformDialect
+        MLIRTransformDialectInterfaces
+        MLIRTransformDialectUtils
         )

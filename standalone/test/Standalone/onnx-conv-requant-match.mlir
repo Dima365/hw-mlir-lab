@@ -7,18 +7,56 @@
 
 module {
   func.func @match_conv_requant(
-      %input: tensor<1x3x8x8xf32>,
-      %weight: tensor<8x3x3x3xf32>,
-      %bias: tensor<8xf32>,
-      %scale: tensor<f32>,
-      %zero_point: tensor<ui8>) {
+      %input_q: tensor<1x3x8x8xui8>) {
+    %activation_scale = "onnx.Constant"() {value = dense<0.5> : tensor<f32>}
+        : () -> tensor<f32>
+    %activation_zero_point = "onnx.Constant"() {value = dense<3> : tensor<ui8>}
+        : () -> tensor<ui8>
+    %input = "onnx.DequantizeLinear"(
+        %input_q, %activation_scale, %activation_zero_point)
+        {axis = 1 : si64}
+        : (tensor<1x3x8x8xui8>, tensor<f32>, tensor<ui8>)
+          -> tensor<1x3x8x8xf32>
+
+    %weight_q = "onnx.Constant"() {value = dense<0> : tensor<8x3x3x3xi8>}
+        : () -> tensor<8x3x3x3xi8>
+    %weight_scale = "onnx.Constant"() {
+        value = dense<[0.25, 0.125, 0.0625, 0.03125,
+                       0.25, 0.125, 0.0625, 0.03125]> : tensor<8xf32>
+      } : () -> tensor<8xf32>
+    %weight_zero_point = "onnx.Constant"() {value = dense<0> : tensor<8xi8>}
+        : () -> tensor<8xi8>
+    %weight = "onnx.DequantizeLinear"(
+        %weight_q, %weight_scale, %weight_zero_point)
+        {axis = 0 : si64}
+        : (tensor<8x3x3x3xi8>, tensor<8xf32>, tensor<8xi8>)
+          -> tensor<8x3x3x3xf32>
+
+    %bias_q = "onnx.Constant"() {value = dense<0> : tensor<8xi32>}
+        : () -> tensor<8xi32>
+    %bias_scale = "onnx.Constant"() {
+        value = dense<[0.125, 0.0625, 0.03125, 0.015625,
+                       0.125, 0.0625, 0.03125, 0.015625]> : tensor<8xf32>
+      } : () -> tensor<8xf32>
+    %bias_zero_point = "onnx.Constant"() {value = dense<0> : tensor<8xi32>}
+        : () -> tensor<8xi32>
+    %bias = "onnx.DequantizeLinear"(
+        %bias_q, %bias_scale, %bias_zero_point)
+        {axis = 0 : si64}
+        : (tensor<8xi32>, tensor<8xf32>, tensor<8xi32>) -> tensor<8xf32>
+
+    %output_scale = "onnx.Constant"() {value = dense<0.25> : tensor<f32>}
+        : () -> tensor<f32>
+    %output_zero_point = "onnx.Constant"() {value = dense<7> : tensor<ui8>}
+        : () -> tensor<ui8>
+
     %conv_with_relu = "onnx.Conv"(%input, %weight, %bias)
         : (tensor<1x3x8x8xf32>, tensor<8x3x3x3xf32>, tensor<8xf32>)
           -> tensor<1x8x8x8xf32>
     %relu = "onnx.Relu"(%conv_with_relu)
         : (tensor<1x8x8x8xf32>) -> tensor<1x8x8x8xf32>
     %quant_after_relu =
-        "onnx.QuantizeLinear"(%relu, %scale, %zero_point)
+        "onnx.QuantizeLinear"(%relu, %output_scale, %output_zero_point)
         : (tensor<1x8x8x8xf32>, tensor<f32>, tensor<ui8>)
           -> tensor<1x8x8x8xui8>
         loc("conv_relu_quantize")
@@ -27,7 +65,8 @@ module {
         : (tensor<1x3x8x8xf32>, tensor<8x3x3x3xf32>, tensor<8xf32>)
           -> tensor<1x8x8x8xf32>
     %quant_after_conv =
-        "onnx.QuantizeLinear"(%conv_without_relu, %scale, %zero_point)
+        "onnx.QuantizeLinear"(
+            %conv_without_relu, %output_scale, %output_zero_point)
         : (tensor<1x8x8x8xf32>, tensor<f32>, tensor<ui8>)
           -> tensor<1x8x8x8xui8>
         loc("conv_quantize")
@@ -35,15 +74,16 @@ module {
     %add = "onnx.Add"(%input, %input)
         : (tensor<1x3x8x8xf32>, tensor<1x3x8x8xf32>)
           -> tensor<1x3x8x8xf32>
-    %quant_after_add = "onnx.QuantizeLinear"(%add, %scale, %zero_point)
+    %quant_after_add = "onnx.QuantizeLinear"(
+        %add, %output_scale, %output_zero_point)
         : (tensor<1x3x8x8xf32>, tensor<f32>, tensor<ui8>)
           -> tensor<1x3x8x8xui8>
         loc("non_conv_quantize")
 
     %relu_without_conv = "onnx.Relu"(%input)
         : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
-    %quant_after_non_conv_relu =
-        "onnx.QuantizeLinear"(%relu_without_conv, %scale, %zero_point)
+    %quant_after_non_conv_relu = "onnx.QuantizeLinear"(
+        %relu_without_conv, %output_scale, %output_zero_point)
         : (tensor<1x3x8x8xf32>, tensor<f32>, tensor<ui8>)
           -> tensor<1x3x8x8xui8>
         loc("non_conv_relu_quantize")

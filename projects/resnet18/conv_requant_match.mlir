@@ -13,6 +13,28 @@ module @onnx_conv_requant_match
         : (!transform.any_op) ->
           (!transform.any_op, !transform.any_op)
 
+    %relu_activation_scale, %relu_activation_zero_point,
+    %relu_weight_scales, %relu_weight_zero_points,
+    %relu_output_scale, %relu_output_zero_point,
+    %relu_bias_scales, %relu_bias_zero_points =
+        transform.standalone.extract_onnx_conv_qparams %conv_with_relu
+        : (!transform.any_op) ->
+          (!transform.any_param, !transform.any_param,
+           !transform.any_param, !transform.any_param,
+           !transform.any_param, !transform.any_param,
+           !transform.any_param, !transform.any_param)
+
+    %direct_activation_scale, %direct_activation_zero_point,
+    %direct_weight_scales, %direct_weight_zero_points,
+    %direct_output_scale, %direct_output_zero_point,
+    %direct_bias_scales, %direct_bias_zero_points =
+        transform.standalone.extract_onnx_conv_qparams %conv_without_relu
+        : (!transform.any_op) ->
+          (!transform.any_param, !transform.any_param,
+           !transform.any_param, !transform.any_param,
+           !transform.any_param, !transform.any_param,
+           !transform.any_param, !transform.any_param)
+
     transform.debug.emit_remark_at %quant_after_relu,
         "matched Conv -> Relu -> QuantizeLinear" : !transform.any_op
     transform.debug.emit_remark_at %quant_after_conv,

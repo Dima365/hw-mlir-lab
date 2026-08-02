@@ -18,6 +18,7 @@
 
 #include "Standalone/StandaloneDialect.h"
 #include "Standalone/StandalonePasses.h"
+#include "Standalone/StandaloneTransformOps.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
@@ -28,6 +29,7 @@ int main(int argc, char **argv) {
   mlir::registerAllDialects(registry);
   mlir::registerAllExtensions(registry);
   registry.insert<mlir::standalone::StandaloneDialect>();
+  mlir::standalone::registerTransformDialectExtension(registry);
 
   // mlir::DialectRegistry registry;
   // registry.insert<mlir::standalone::StandaloneDialect,
