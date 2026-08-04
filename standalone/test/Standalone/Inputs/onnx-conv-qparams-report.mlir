@@ -16,6 +16,14 @@ module @onnx_conv_qparams_report
            !transform.any_param, !transform.any_param,
            !transform.any_param, !transform.any_param)
 
+    %multipliers, %shifts =
+        transform.standalone.compute_conv_requant_fixed_point
+            %activation_scale, %weight_scales,
+            %weight_zero_points, %output_scale
+        : (!transform.any_param, !transform.any_param,
+           !transform.any_param, !transform.any_param) ->
+          (!transform.any_param, !transform.any_param)
+
     transform.debug.emit_param_as_remark %activation_scale,
         "activation_scale" : !transform.any_param
     transform.debug.emit_param_as_remark %activation_zero_point,
@@ -32,6 +40,10 @@ module @onnx_conv_qparams_report
         "bias_scales" : !transform.any_param
     transform.debug.emit_param_as_remark %bias_zero_points,
         "bias_zero_points" : !transform.any_param
+    transform.debug.emit_param_as_remark %multipliers,
+        "multipliers" : !transform.any_param
+    transform.debug.emit_param_as_remark %shifts,
+        "shifts" : !transform.any_param
     transform.yield
   }
 

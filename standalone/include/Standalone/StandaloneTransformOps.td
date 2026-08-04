@@ -61,4 +61,45 @@ def ExtractONNXConvQuantParamsOp
   }];
 }
 
+def ComputeConvRequantFixedPointOp
+    : TransformDialectOp<"standalone.compute_conv_requant_fixed_point", [
+        DeclareOpInterfaceMethods<TransformOpInterface>,
+        MemoryEffectsOpInterface,
+        ParamProducerTransformOpTrait
+      ]> {
+  let summary = "Compute fixed-point parameters for CONV_REQUANT";
+  let description = [{
+    Reads parameter handles produced by `extract_onnx_conv_qparams`. For every
+    output channel, it approximates
+
+    ```
+    activation_scale * weight_scale[channel] / output_scale
+    ```
+
+    as `multiplier[channel] / 2^shift[channel]`. Multipliers are non-negative
+    signed-i32 values and shifts are selected from 31 down to zero to maximize
+    precision. Coefficient rounding uses round-to-nearest, ties-to-even.
+
+    Each operand may contain parameters for several Conv operations. Operand
+    lists are matched by index and must have equal lengths. The returned lists
+    contain one multiplier array and one shift array for each Conv. A later
+    lowering slices each array into the eight-channel tiles consumed by
+    `standalone.conv_requant`. Weight zero-points must be zero until asymmetric
+    weight correction is implemented in the accumulator path.
+  }];
+
+  let arguments = (ins
+      TransformParamTypeInterface:$activation_scale,
+      TransformParamTypeInterface:$weight_scales,
+      TransformParamTypeInterface:$weight_zero_points,
+      TransformParamTypeInterface:$output_scale);
+  let results = (outs
+      TransformParamTypeInterface:$multipliers,
+      TransformParamTypeInterface:$shifts);
+
+  let assemblyFormat =
+      "$activation_scale `,` $weight_scales `,` $weight_zero_points `,` "
+      "$output_scale attr-dict `:` functional-type(operands, results)";
+}
+
 #endif // STANDALONE_TRANSFORM_OPS

@@ -61,3 +61,5 @@ module {
 // CHECK: output_zero_point 7 : i64
 // CHECK: bias_scales array<f64: 1.250000e-01, 6.250000e-02>
 // CHECK: bias_zero_points array<i64: 0, 0>
+// CHECK: multipliers array<i64: 1073741824, 536870912>
+// CHECK: shifts array<i64: 31, 31>
