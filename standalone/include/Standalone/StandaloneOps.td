@@ -91,30 +91,87 @@ def Standalone_QAddReluOp
   let hasVerifier = 1;
 }
 
-def Standalone_ConvRequantOp
-    : Standalone_Op<"conv_requant"> {
-  let summary = "8x8 per-output-channel Conv requantization";
+def Standalone_ConvAccumulateOp
+    : Standalone_Op<"conv_accumulate", [Pure]> {
+  let summary = "Integer convolution accumulation in NCHW layout";
   let description = [{
-    Requantizes an 8x8 tile of final i32 Conv accumulators to a per-tensor
-    uint8 activation domain. Rows are spatial positions and columns are output
-    channels. The multiplier and shift memrefs contain one fixed-point pair per
-    output-channel column.
+    Computes an unfused integer convolution accumulator:
+
+    ```
+    acc[n, oc, oh, ow] = bias[oc] +
+      sum(ic, kh, kw) ((input[n, ic, ih, iw] - input_zero_point) *
+                       weight[oc, ic, kh, kw])
+    ```
+
+    The first implementation accepts static rank-4 NCHW uint8 activations,
+    static rank-4 OIHW signed-i8 weights, a rank-1 i32 bias and produces a
+    static rank-4 NCHW i32 tensor. Only `group = 1` is supported. Padding is
+    interpreted using the ONNX `[top, left, bottom, right]` convention; padded
+    activation values equal `input_zero_point` and therefore add zero to the
+    accumulator.
+
+    This is a high-level accelerator operation. It intentionally has no CPU or
+    systolic-array lowering yet.
   }];
 
   let arguments = (ins
-    Arg<AnyMemRef, "", [MemRead]>:$acc,
-    Arg<AnyMemRef, "", [MemRead]>:$multiplier,
-    Arg<AnyMemRef, "", [MemRead]>:$shift,
-    Arg<AnyMemRef, "", [MemWrite]>:$out,
+    AnyRankedTensor:$input,
+    AnyRankedTensor:$weight,
+    AnyRankedTensor:$bias,
+    I32Attr:$input_zero_point,
+    DenseI64ArrayAttr:$strides,
+    DenseI64ArrayAttr:$pads,
+    DenseI64ArrayAttr:$dilations,
+    I64Attr:$group
+  );
+
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    `ins` `(` $input `,` $weight `,` $bias `:`
+      type($input) `,` type($weight) `,` type($bias) `)`
+    attr-dict `->` type($result)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def Standalone_ConvRequantOp
+    : Standalone_Op<"conv_requant", [
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ]> {
+  let summary = "Per-output-channel Conv requantization";
+  let description = [{
+    Requantizes final i32 Conv accumulators to a per-tensor uint8 activation
+    domain.
+
+    The tensor form represents an entire static NCHW tensor in high-level IR.
+    Its rank-1 multiplier and shift tensors contain one fixed-point pair per
+    output channel and the operation returns the output tensor.
+
+    The buffer form is the hardware tile operation. It accepts an 8x8
+    accumulator tile where rows are spatial positions and columns are output
+    channels. Its multiplier and shift memrefs contain eight fixed-point pairs.
+    The buffer form has no SSA result and writes the output memref.
+  }];
+
+  let arguments = (ins
+    AnyShaped:$acc,
+    AnyShaped:$multiplier,
+    AnyShaped:$shift,
+    AnyShaped:$out,
     I32Attr:$output_zero_point,
     I32Attr:$relu_enable
   );
+
+  let results = (outs Variadic<AnyRankedTensor>:$result);
 
   let assemblyFormat = [{
     `ins` `(` $acc `,` $multiplier `,` $shift `:`
       type($acc) `,` type($multiplier) `,` type($shift) `)`
     `outs` `(` $out `:` type($out) `)`
     attr-dict
+    (`->` type($result)^)?
   }];
 
   let hasVerifier = 1;

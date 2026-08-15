@@ -56,6 +56,25 @@ module @onnx_conv_requant_match
     transform.debug.emit_remark_at %quant_after_conv,
         "matched Conv -> QuantizeLinear" : !transform.any_op
 
+    %relu_accumulates, %relu_requants =
+        transform.standalone.lower_onnx_conv_relu_requant
+            %conv_with_relu, %relu, %quant_after_relu,
+            %relu_multipliers, %relu_shifts, %relu_output_zero_point
+        : (!transform.any_op, !transform.any_op, !transform.any_op,
+           !transform.any_param, !transform.any_param,
+           !transform.any_param) ->
+          (!transform.any_op, !transform.any_op)
+
+    %direct_accumulates, %direct_requants =
+        transform.standalone.lower_onnx_conv_requant
+            %conv_without_relu, %quant_after_conv,
+            %direct_multipliers, %direct_shifts,
+            %direct_output_zero_point
+        : (!transform.any_op, !transform.any_op,
+           !transform.any_param, !transform.any_param,
+           !transform.any_param) ->
+          (!transform.any_op, !transform.any_op)
+
     transform.yield
   }
 

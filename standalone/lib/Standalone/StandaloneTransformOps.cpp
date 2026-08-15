@@ -8,6 +8,11 @@
 
 #include "Standalone/StandaloneTransformOps.h"
 
+#include "Standalone/StandaloneDialect.h"
+#include "Standalone/StandaloneOps.h"
+
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/Dialect/Transform/Utils/Utils.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -39,6 +44,35 @@ struct ConvQuantParams {
 struct ConvRequantFixedPointParams {
   SmallVector<int64_t> multipliers;
   SmallVector<int64_t> shifts;
+};
+
+struct ConvAccumulateSpec {
+  Value input;
+  Value weight;
+  Value bias;
+  RankedTensorType resultType;
+  int64_t inputZeroPoint;
+  SmallVector<int64_t> strides;
+  SmallVector<int64_t> pads;
+  SmallVector<int64_t> dilations;
+  int64_t group;
+};
+
+struct ConvRequantParams {
+  DenseI64ArrayAttr multipliers;
+  DenseI64ArrayAttr shifts;
+  int64_t outputZeroPoint;
+};
+
+struct ConvRequantRewrite {
+  Operation *conv;
+  Operation *relu;
+  Operation *quantize;
+  ConvAccumulateSpec accumulate;
+  DenseI64ArrayAttr multipliers;
+  DenseI64ArrayAttr shifts;
+  RankedTensorType outputType;
+  int64_t outputZeroPoint;
 };
 
 static LogicalResult fail(std::string &error, StringRef message) {
@@ -396,6 +430,361 @@ static LogicalResult computeConvRequantFixedPoint(
   return success();
 }
 
+static LogicalResult readI64ArrayAttribute(Operation *op, StringRef name,
+                                           ArrayRef<int64_t> defaultValues,
+                                           size_t expectedSize,
+                                           SmallVectorImpl<int64_t> &result,
+                                           std::string &error) {
+  Attribute attribute = op->getAttr(name);
+  if (!attribute) {
+    result.append(defaultValues.begin(), defaultValues.end());
+    return success();
+  }
+
+  if (auto dense = dyn_cast<DenseI64ArrayAttr>(attribute)) {
+    result.append(dense.asArrayRef().begin(), dense.asArrayRef().end());
+  } else if (auto array = dyn_cast<ArrayAttr>(attribute)) {
+    for (Attribute element : array) {
+      auto integer = dyn_cast<IntegerAttr>(element);
+      if (!integer)
+        return fail(error, (name + " must contain integer values").str());
+      result.push_back(integer.getValue().getSExtValue());
+    }
+  } else {
+    return fail(error, (name + " has an unsupported attribute type").str());
+  }
+
+  if (result.size() != expectedSize) {
+    error = name.str() + " must contain " + std::to_string(expectedSize) +
+            " values";
+    return failure();
+  }
+  return success();
+}
+
+static LogicalResult prepareConvAccumulateSpec(Operation *conv,
+                                               ConvAccumulateSpec &spec,
+                                               std::string &error) {
+  if (!hasName(conv, "onnx.Conv"))
+    return fail(error, "Conv target must be onnx.Conv");
+
+  if (conv->getNumOperands() != 3 || conv->getNumResults() != 1)
+    return fail(error,
+                "onnx.Conv must have activation, weight and bias operands");
+
+  ConvQuantParams quantParams;
+  if (failed(extractConvQuantParams(conv, quantParams, error)))
+    return failure();
+
+  if (llvm::any_of(quantParams.weightZeroPoints,
+                   [](int64_t value) { return value != 0; }))
+    return fail(error,
+                "weight zero points must be zero for integer accumulation");
+
+  Operation *activationDQ;
+  Operation *weightDQ;
+  Operation *biasDQ;
+  if (failed(getDQ(conv->getOperand(0), "activation", activationDQ, error)) ||
+      failed(getDQ(conv->getOperand(1), "weight", weightDQ, error)) ||
+      failed(getDQ(conv->getOperand(2), "bias", biasDQ, error)))
+    return failure();
+
+  Value input = activationDQ->getOperand(0);
+  auto inputType = dyn_cast<RankedTensorType>(input.getType());
+  if (!inputType || !inputType.hasStaticShape() || inputType.getRank() != 4 ||
+      !isUI8(inputType.getElementType()))
+    return fail(error, "quantized activation must be static rank-4 NCHW ui8");
+
+  Value weight = weightDQ->getOperand(0);
+  auto weightType = dyn_cast<RankedTensorType>(weight.getType());
+  if (!weightType || !weightType.hasStaticShape() ||
+      weightType.getRank() != 4 || !isI8(weightType.getElementType()))
+    return fail(error, "quantized weight must be static rank-4 OIHW i8");
+
+  Value bias = biasDQ->getOperand(0);
+  auto biasType = dyn_cast<RankedTensorType>(bias.getType());
+  if (!biasType || !biasType.hasStaticShape() || biasType.getRank() != 1 ||
+      !isI32(biasType.getElementType()))
+    return fail(error, "quantized bias must be static rank-1 i32");
+
+  auto convOutputType =
+      dyn_cast<RankedTensorType>(conv->getResult(0).getType());
+  if (!convOutputType || !convOutputType.hasStaticShape() ||
+      convOutputType.getRank() != 4)
+    return fail(error, "onnx.Conv result must be a static rank-4 NCHW tensor");
+
+  int64_t group = 1;
+  if (auto groupAttr = conv->getAttrOfType<IntegerAttr>("group"))
+    group = groupAttr.getValue().getSExtValue();
+  if (group != 1)
+    return fail(error, "onnx.Conv group must be 1");
+
+  if (auto autoPad = conv->getAttrOfType<StringAttr>("auto_pad"))
+    if (autoPad.getValue() != "NOTSET")
+      return fail(error, "onnx.Conv auto_pad must be NOTSET");
+
+  SmallVector<int64_t> strides;
+  if (failed(
+          readI64ArrayAttribute(conv, "strides", {1, 1}, 2, strides, error))) {
+    return failure();
+  }
+  if (llvm::any_of(strides, [](int64_t value) { return value <= 0; }))
+    return fail(error, "onnx.Conv strides must be positive");
+
+  SmallVector<int64_t> pads;
+  if (failed(
+          readI64ArrayAttribute(conv, "pads", {0, 0, 0, 0}, 4, pads, error))) {
+    return failure();
+  }
+  if (llvm::any_of(pads, [](int64_t value) { return value < 0; }))
+    return fail(error, "onnx.Conv pads must be non-negative");
+
+  SmallVector<int64_t> dilations;
+  if (failed(readI64ArrayAttribute(conv, "dilations", {1, 1}, 2, dilations,
+                                   error))) {
+    return failure();
+  }
+  if (llvm::any_of(dilations, [](int64_t value) { return value <= 0; }))
+    return fail(error, "onnx.Conv dilations must be positive");
+
+  if (Attribute kernelShapeAttr = conv->getAttr("kernel_shape")) {
+    SmallVector<int64_t> kernelShape;
+    if (failed(readI64ArrayAttribute(conv, "kernel_shape", {}, 2, kernelShape,
+                                     error)))
+      return failure();
+
+    if (kernelShape[0] != weightType.getDimSize(2) ||
+        kernelShape[1] != weightType.getDimSize(3))
+      return fail(error, "onnx.Conv kernel_shape must match weight shape");
+  }
+
+  if (weightType.getDimSize(1) != inputType.getDimSize(1))
+    return fail(error, "weight input channels must match activation channels");
+  if (biasType.getDimSize(0) != weightType.getDimSize(0))
+    return fail(error, "bias length must match weight output channels");
+
+  int64_t effectiveKernelHeight =
+      dilations[0] * (weightType.getDimSize(2) - 1) + 1;
+  int64_t effectiveKernelWidth =
+      dilations[1] * (weightType.getDimSize(3) - 1) + 1;
+  int64_t heightNumerator =
+      inputType.getDimSize(2) + pads[0] + pads[2] - effectiveKernelHeight;
+  int64_t widthNumerator =
+      inputType.getDimSize(3) + pads[1] + pads[3] - effectiveKernelWidth;
+  if (heightNumerator < 0 || widthNumerator < 0)
+    return fail(error, "kernel is larger than the padded activation");
+
+  SmallVector<int64_t> expectedOutputShape = {
+      inputType.getDimSize(0), weightType.getDimSize(0),
+      heightNumerator / strides[0] + 1, widthNumerator / strides[1] + 1};
+  if (convOutputType.getShape() != ArrayRef<int64_t>(expectedOutputShape))
+    return fail(error, "onnx.Conv result shape does not match its attributes");
+
+  spec = {input,
+          weight,
+          bias,
+          RankedTensorType::get(expectedOutputShape,
+                                IntegerType::get(conv->getContext(), 32)),
+          quantParams.activationZeroPoint,
+          std::move(strides),
+          std::move(pads),
+          std::move(dilations),
+          group};
+  return success();
+}
+
+static LogicalResult validateQuantize(Operation *quantize,
+                                      RankedTensorType &outputType,
+                                      std::string &error) {
+  if (!hasName(quantize, "onnx.QuantizeLinear"))
+    return fail(error, "target must be onnx.QuantizeLinear");
+
+  if (quantize->getNumOperands() != 3 || quantize->getNumResults() != 1)
+    return fail(error,
+                "onnx.QuantizeLinear must have three operands and one result");
+
+  outputType = dyn_cast<RankedTensorType>(quantize->getResult(0).getType());
+  if (!outputType || outputType.getRank() != 4 ||
+      !outputType.hasStaticShape() || !isUI8(outputType.getElementType()))
+    return fail(
+        error, "QuantizeLinear result must be a static rank-4 NCHW ui8 tensor");
+
+  return success();
+}
+
+static LogicalResult validateConvRequantChain(Operation *conv, Operation *relu,
+                                              Operation *quantize,
+                                              std::string &error) {
+  if (!hasName(conv, "onnx.Conv"))
+    return fail(error, "Conv target must be onnx.Conv");
+
+  if (relu) {
+    if (!hasName(relu, "onnx.Relu") || relu->getNumOperands() != 1 ||
+        relu->getOperand(0).getDefiningOp() != conv)
+      return fail(error, "Relu target must be the consumer of Conv");
+
+    if (quantize->getOperand(0).getDefiningOp() != relu)
+      return fail(error, "QuantizeLinear must consume the selected Relu");
+
+  } else if (quantize->getOperand(0).getDefiningOp() != conv) {
+    return fail(error, "QuantizeLinear must consume the selected Conv");
+  }
+
+  return success();
+}
+
+static LogicalResult
+prepareConvRequantParams(Operation *quantize, RankedTensorType outputType,
+                         Attribute multiplierParam, Attribute shiftParam,
+                         Attribute outputZeroPointParam,
+                         ConvRequantParams &params, std::string &error) {
+  auto multipliers = dyn_cast<DenseI64ArrayAttr>(multiplierParam);
+  auto shifts = dyn_cast<DenseI64ArrayAttr>(shiftParam);
+  auto outputZeroPoint = dyn_cast<IntegerAttr>(outputZeroPointParam);
+  if (!multipliers || !shifts || !outputZeroPoint)
+    return fail(error, "requantization parameters have unsupported types");
+
+  int64_t outputChannels = outputType.getDimSize(1);
+  if (static_cast<int64_t>(multipliers.size()) != outputChannels ||
+      static_cast<int64_t>(shifts.size()) != outputChannels)
+    return fail(error,
+                "multiplier and shift counts must equal output channels");
+
+  for (auto [channel, multiplier] : llvm::enumerate(multipliers.asArrayRef())) {
+    if (multiplier < 0 || multiplier > std::numeric_limits<int32_t>::max()) {
+      error = "multiplier at channel " + std::to_string(channel) +
+              " does not fit non-negative i32";
+      return failure();
+    }
+  }
+
+  for (auto [channel, shift] : llvm::enumerate(shifts.asArrayRef())) {
+    if (shift < 0 || shift > 63) {
+      error =
+          "shift at channel " + std::to_string(channel) + " is outside [0, 63]";
+      return failure();
+    }
+  }
+
+  int64_t zeroPoint = outputZeroPoint.getValue().getSExtValue();
+  if (zeroPoint < 0 || zeroPoint > 255)
+    return fail(error, "output zero point is outside [0, 255]");
+
+  DenseElementsAttr graphZeroPointAttr;
+  int64_t graphZeroPoint;
+  if (failed(getDenseConstant(quantize->getOperand(2), "output zero point",
+                              graphZeroPointAttr, error)) ||
+      failed(readScalarUI8(graphZeroPointAttr, "output zero point",
+                           graphZeroPoint, error)))
+    return failure();
+
+  if (zeroPoint != graphZeroPoint)
+    return fail(error,
+                "output zero point parameter does not match QuantizeLinear");
+
+  params = {multipliers, shifts, zeroPoint};
+  return success();
+}
+
+static LogicalResult
+prepareConvRequantRewrite(Operation *conv, Operation *relu, Operation *quantize,
+                          Attribute multiplierParam, Attribute shiftParam,
+                          Attribute outputZeroPointParam,
+                          ConvRequantRewrite &rewrite, std::string &error) {
+  RankedTensorType outputType;
+  if (failed(validateQuantize(quantize, outputType, error)))
+    return failure();
+
+  if (failed(validateConvRequantChain(conv, relu, quantize, error)))
+    return failure();
+
+  ConvAccumulateSpec accumulate;
+  if (failed(prepareConvAccumulateSpec(conv, accumulate, error)))
+    return failure();
+  if (accumulate.resultType.getShape() != outputType.getShape())
+    return fail(error,
+                "integer accumulator and QuantizeLinear shapes must match");
+
+  ConvRequantParams params{};
+  if (failed(prepareConvRequantParams(quantize, outputType, multiplierParam,
+                                      shiftParam, outputZeroPointParam, params,
+                                      error)))
+    return failure();
+
+  rewrite = {conv,
+             relu,
+             quantize,
+             std::move(accumulate),
+             params.multipliers,
+             params.shifts,
+             outputType,
+             params.outputZeroPoint};
+  return success();
+}
+
+static Value createI32TensorConstant(TransformRewriter &rewriter, Location loc,
+                                     DenseI64ArrayAttr values) {
+  SmallVector<int32_t> narrowed;
+  narrowed.reserve(values.size());
+  for (int64_t value : values.asArrayRef())
+    narrowed.push_back(static_cast<int32_t>(value));
+
+  auto type = RankedTensorType::get({static_cast<int64_t>(narrowed.size())},
+                                    rewriter.getI32Type());
+  auto value = DenseIntElementsAttr::get(type, narrowed);
+  return arith::ConstantOp::create(rewriter, loc, type, value);
+}
+
+static Operation *createConvAccumulateOp(TransformRewriter &rewriter,
+                                         const ConvRequantRewrite &rewrite) {
+  Location loc = rewrite.conv->getLoc();
+  rewriter.setInsertionPoint(rewrite.conv);
+
+  OperationState state(loc, standalone::ConvAccumulateOp::getOperationName());
+  state.addOperands({rewrite.accumulate.input, rewrite.accumulate.weight,
+                     rewrite.accumulate.bias});
+  state.addTypes(rewrite.accumulate.resultType);
+  state.addAttribute(
+      "input_zero_point",
+      rewriter.getI32IntegerAttr(rewrite.accumulate.inputZeroPoint));
+  state.addAttribute("strides",
+                     DenseI64ArrayAttr::get(rewriter.getContext(),
+                                            rewrite.accumulate.strides));
+  state.addAttribute("pads", DenseI64ArrayAttr::get(rewriter.getContext(),
+                                                    rewrite.accumulate.pads));
+  state.addAttribute("dilations",
+                     DenseI64ArrayAttr::get(rewriter.getContext(),
+                                            rewrite.accumulate.dilations));
+  state.addAttribute("group",
+                     rewriter.getI64IntegerAttr(rewrite.accumulate.group));
+
+  return rewriter.create(state);
+}
+
+static Operation *createConvRequantOp(TransformRewriter &rewriter,
+                                      const ConvRequantRewrite &rewrite,
+                                      Value accumulator, bool hasRelu) {
+  Location loc = rewrite.quantize->getLoc();
+  rewriter.setInsertionPoint(rewrite.quantize);
+
+  Value multipliers =
+      createI32TensorConstant(rewriter, loc, rewrite.multipliers);
+  Value shifts = createI32TensorConstant(rewriter, loc, rewrite.shifts);
+  Value output = tensor::EmptyOp::create(
+      rewriter, loc, rewrite.outputType.getShape(),
+      rewrite.outputType.getElementType(), rewrite.outputType.getEncoding());
+
+  OperationState state(loc, standalone::ConvRequantOp::getOperationName());
+  state.addOperands({accumulator, multipliers, shifts, output});
+  state.addTypes(rewrite.outputType);
+  state.addAttribute("output_zero_point",
+                     rewriter.getI32IntegerAttr(rewrite.outputZeroPoint));
+  state.addAttribute("relu_enable",
+                     rewriter.getI32IntegerAttr(hasRelu ? 1 : 0));
+
+  return rewriter.create(state);
+}
+
 class StandaloneTransformDialectExtension
     : public TransformDialectExtension<StandaloneTransformDialectExtension> {
 public:
@@ -405,6 +794,9 @@ public:
   using Base::Base;
 
   void init() {
+    declareDependentDialect<arith::ArithDialect>();
+    declareDependentDialect<standalone::StandaloneDialect>();
+    declareDependentDialect<tensor::TensorDialect>();
     registerTransformOps<
 #define GET_OP_LIST
 #include "Standalone/StandaloneTransformOps.cpp.inc"
@@ -504,6 +896,140 @@ transform::ComputeConvRequantFixedPointOp::apply(TransformRewriter &rewriter,
 
   results.setParams(cast<OpResult>(getMultipliers()), multiplierResults);
   results.setParams(cast<OpResult>(getShifts()), shiftResults);
+
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform::LowerONNXConvRequantOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  consumesHandle(getConvMutable(), effects);
+  consumesHandle(getQuantizeMutable(), effects);
+  onlyReadsHandle(getMultipliersMutable(), effects);
+  onlyReadsHandle(getShiftsMutable(), effects);
+  onlyReadsHandle(getOutputZeroPointMutable(), effects);
+  producesHandle(getOperation()->getResults(), effects);
+  modifiesPayload(effects);
+}
+
+static LogicalResult lowerONNXConvRequant(
+    TransformRewriter &rewriter, ArrayRef<Operation *> convOps,
+    ArrayRef<Operation *> reluOps, ArrayRef<Operation *> quantizeOps,
+    ArrayRef<Attribute> multiplierParams, ArrayRef<Attribute> shiftParams,
+    ArrayRef<Attribute> outputZeroPointParams, bool hasRelu,
+    SmallVectorImpl<Operation *> &newAccumulates,
+    SmallVectorImpl<Operation *> &newRequants, std::string &error) {
+
+  size_t rewriteCount = convOps.size();
+  if (quantizeOps.size() != rewriteCount ||
+      (hasRelu && reluOps.size() != rewriteCount) ||
+      (!hasRelu && !reluOps.empty()) ||
+      multiplierParams.size() != rewriteCount ||
+      shiftParams.size() != rewriteCount ||
+      outputZeroPointParams.size() != rewriteCount)
+    return fail(error, "Conv, optional Relu, QuantizeLinear and parameter "
+                       "handles must have equal lengths");
+
+  SmallVector<ConvRequantRewrite, 1> rewrites;
+  rewrites.reserve(rewriteCount);
+  for (size_t index = 0; index < rewriteCount; ++index) {
+    ConvRequantRewrite rewrite;
+
+    if (failed(prepareConvRequantRewrite(
+            convOps[index], hasRelu ? reluOps[index] : nullptr,
+            quantizeOps[index], multiplierParams[index], shiftParams[index],
+            outputZeroPointParams[index], rewrite, error))) {
+      error = "requantization at index " + std::to_string(index) + ": " + error;
+      return failure();
+    }
+
+    rewrites.push_back(rewrite);
+  }
+
+  newAccumulates.reserve(newAccumulates.size() + rewriteCount);
+  newRequants.reserve(newRequants.size() + rewriteCount);
+  for (const ConvRequantRewrite &rewrite : rewrites) {
+    Operation *accumulate = createConvAccumulateOp(rewriter, rewrite);
+    Operation *requant = createConvRequantOp(rewriter, rewrite,
+                                             accumulate->getResult(0), hasRelu);
+
+    rewriter.replaceOp(rewrite.quantize, requant->getResults());
+    if (rewrite.relu)
+      rewriter.eraseOp(rewrite.relu);
+    rewriter.eraseOp(rewrite.conv);
+
+    newAccumulates.push_back(accumulate);
+    newRequants.push_back(requant);
+  }
+
+  return success();
+}
+
+DiagnosedSilenceableFailure
+transform::LowerONNXConvRequantOp::apply(TransformRewriter &rewriter,
+                                         TransformResults &results,
+                                         TransformState &state) {
+  SmallVector<Operation *> convOps;
+  for (Operation *op : state.getPayloadOps(getConv()))
+    convOps.push_back(op);
+
+  SmallVector<Operation *> quantizeOps;
+  for (Operation *op : state.getPayloadOps(getQuantize()))
+    quantizeOps.push_back(op);
+
+  SmallVector<Operation *> accumulates;
+  SmallVector<Operation *> requants;
+  std::string error;
+  if (failed(lowerONNXConvRequant(
+          rewriter, convOps, {}, quantizeOps, state.getParams(getMultipliers()),
+          state.getParams(getShifts()), state.getParams(getOutputZeroPoint()),
+          false, accumulates, requants, error)))
+    return emitSilenceableFailure(getLoc(), error);
+
+  results.set(cast<OpResult>(getAccumulate()), accumulates);
+  results.set(cast<OpResult>(getRequant()), requants);
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform::LowerONNXConvReluRequantOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  consumesHandle(getConvMutable(), effects);
+  consumesHandle(getReluMutable(), effects);
+  consumesHandle(getQuantizeMutable(), effects);
+  onlyReadsHandle(getMultipliersMutable(), effects);
+  onlyReadsHandle(getShiftsMutable(), effects);
+  onlyReadsHandle(getOutputZeroPointMutable(), effects);
+  producesHandle(getOperation()->getResults(), effects);
+  modifiesPayload(effects);
+}
+
+DiagnosedSilenceableFailure
+transform::LowerONNXConvReluRequantOp::apply(TransformRewriter &rewriter,
+                                             TransformResults &results,
+                                             TransformState &state) {
+  SmallVector<Operation *> convOps;
+  for (Operation *op : state.getPayloadOps(getConv()))
+    convOps.push_back(op);
+
+  SmallVector<Operation *> reluOps;
+  for (Operation *op : state.getPayloadOps(getRelu()))
+    reluOps.push_back(op);
+
+  SmallVector<Operation *> quantizeOps;
+  for (Operation *op : state.getPayloadOps(getQuantize()))
+    quantizeOps.push_back(op);
+
+  SmallVector<Operation *> accumulates;
+  SmallVector<Operation *> requants;
+  std::string error;
+  if (failed(lowerONNXConvRequant(rewriter, convOps, reluOps, quantizeOps,
+                                  state.getParams(getMultipliers()),
+                                  state.getParams(getShifts()),
+                                  state.getParams(getOutputZeroPoint()), true,
+                                  accumulates, requants, error)))
+    return emitSilenceableFailure(getLoc(), error);
+
+  results.set(cast<OpResult>(getAccumulate()), accumulates);
+  results.set(cast<OpResult>(getRequant()), requants);
 
   return DiagnosedSilenceableFailure::success();
 }

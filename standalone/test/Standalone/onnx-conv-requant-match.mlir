@@ -50,7 +50,10 @@ module {
     %output_zero_point = "onnx.Constant"() {value = dense<7> : tensor<ui8>}
         : () -> tensor<ui8>
 
-    %conv_with_relu = "onnx.Conv"(%input, %weight, %bias)
+    %conv_with_relu = "onnx.Conv"(%input, %weight, %bias) {
+      dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3],
+      pads = [1, 1, 1, 1], strides = [1, 1]
+    }
         : (tensor<1x3x8x8xf32>, tensor<8x3x3x3xf32>, tensor<8xf32>)
           -> tensor<1x8x8x8xf32>
     %relu = "onnx.Relu"(%conv_with_relu)
@@ -61,7 +64,10 @@ module {
           -> tensor<1x8x8x8xui8>
         loc("conv_relu_quantize")
 
-    %conv_without_relu = "onnx.Conv"(%input, %weight, %bias)
+    %conv_without_relu = "onnx.Conv"(%input, %weight, %bias) {
+      dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3],
+      pads = [1, 1, 1, 1], strides = [1, 1]
+    }
         : (tensor<1x3x8x8xf32>, tensor<8x3x3x3xf32>, tensor<8xf32>)
           -> tensor<1x8x8x8xf32>
     %quant_after_conv =

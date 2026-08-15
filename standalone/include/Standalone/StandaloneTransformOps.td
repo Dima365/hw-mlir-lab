@@ -102,4 +102,75 @@ def ComputeConvRequantFixedPointOp
       "$output_scale attr-dict `:` functional-type(operands, results)";
 }
 
+def LowerONNXConvRequantOp
+    : TransformDialectOp<"standalone.lower_onnx_conv_requant", [
+        DeclareOpInterfaceMethods<TransformOpInterface>,
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ]> {
+  let summary = "Lower ONNX QDQ Conv to integer standalone operations";
+  let description = [{
+    Replaces an `onnx.Conv -> onnx.QuantizeLinear` QDQ chain with
+    `standalone.conv_accumulate -> standalone.conv_requant`. Raw quantized
+    activation, weight and bias values are taken from the three
+    `onnx.DequantizeLinear` inputs of Conv.
+
+    Multipliers, shifts and the output zero point are parameter handles
+    produced by `compute_conv_requant_fixed_point` and
+    `extract_onnx_conv_qparams`. The transform materializes the per-channel
+    arrays as `arith.constant` tensors, creates a `tensor.empty` destination
+    and replaces the QuantizeLinear result. The old Conv and QuantizeLinear
+    operations are erased.
+
+    Conv, QuantizeLinear and parameter sets are paired by position. All
+    handles must contain the same number of entries. Only static NCHW/OIHW,
+    `group = 1` and explicit or default NOTSET padding are supported. This
+    transform does not lower the new integer convolution to CPU code or to
+    systolic-array tiles.
+  }];
+
+  let arguments = (ins
+      TransformHandleTypeInterface:$conv,
+      TransformHandleTypeInterface:$quantize,
+      TransformParamTypeInterface:$multipliers,
+      TransformParamTypeInterface:$shifts,
+      TransformParamTypeInterface:$output_zero_point);
+  let results = (outs
+      TransformHandleTypeInterface:$accumulate,
+      TransformHandleTypeInterface:$requant);
+
+  let assemblyFormat =
+      "$conv `,` $quantize `,` $multipliers `,` $shifts `,` "
+      "$output_zero_point attr-dict `:` functional-type(operands, results)";
+}
+
+def LowerONNXConvReluRequantOp
+    : TransformDialectOp<"standalone.lower_onnx_conv_relu_requant", [
+        DeclareOpInterfaceMethods<TransformOpInterface>,
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ]> {
+  let summary = "Lower ONNX QDQ Conv and ReLU to integer standalone operations";
+  let description = [{
+    Replaces an `onnx.Conv -> onnx.Relu -> onnx.QuantizeLinear` chain with
+    `standalone.conv_accumulate -> standalone.conv_requant`. It has the same
+    quantization and shape contract as `lower_onnx_conv_requant`, and sets
+    `relu_enable = 1` on the requantization operation. Conv, ReLU and
+    QuantizeLinear are consumed and erased by the rewrite.
+  }];
+
+  let arguments = (ins
+      TransformHandleTypeInterface:$conv,
+      TransformHandleTypeInterface:$relu,
+      TransformHandleTypeInterface:$quantize,
+      TransformParamTypeInterface:$multipliers,
+      TransformParamTypeInterface:$shifts,
+      TransformParamTypeInterface:$output_zero_point);
+  let results = (outs
+      TransformHandleTypeInterface:$accumulate,
+      TransformHandleTypeInterface:$requant);
+
+  let assemblyFormat =
+      "$conv `,` $relu `,` $quantize `,` $multipliers `,` $shifts `,` "
+      "$output_zero_point attr-dict `:` functional-type(operands, results)";
+}
+
 #endif // STANDALONE_TRANSFORM_OPS
