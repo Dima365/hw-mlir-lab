@@ -20,6 +20,25 @@ module {
       }
     return
   }
+
+  func.func @qadd_relu_tensor(
+      %lhs: tensor<1x8x2x4xui8>,
+      %rhs: tensor<1x8x2x4xui8>) -> tensor<1x8x2x4xui8> {
+    %out = tensor.empty() : tensor<1x8x2x4xui8>
+    %result = standalone.qadd_relu
+      ins(%lhs, %rhs : tensor<1x8x2x4xui8>, tensor<1x8x2x4xui8>)
+      outs(%out : tensor<1x8x2x4xui8>)
+      {
+        lhs_multiplier = 17 : i32,
+        rhs_multiplier = 13 : i32,
+        shift = 4 : i32,
+        lhs_zero_point = 68 : i32,
+        rhs_zero_point = 65 : i32,
+        output_zero_point = 3 : i32,
+        relu_enable = 1 : i32
+      } -> tensor<1x8x2x4xui8>
+    return %result : tensor<1x8x2x4xui8>
+  }
 }
 
 // PARSE: standalone.qadd_relu
@@ -41,3 +60,6 @@ module {
 // LOWER: %[[RELU:.*]] = arith.constant 1 : i32
 // LOWER: call @qadd_relu_8x8
 // LOWER-SAME: %[[LM]], %[[RM]], %[[SHIFT]], %[[LZP]], %[[RZP]], %[[OZP]], %[[RELU]]
+// LOWER-LABEL: func.func @qadd_relu_tensor
+// LOWER: standalone.qadd_relu
+// LOWER-SAME: -> tensor<1x8x2x4xui8>

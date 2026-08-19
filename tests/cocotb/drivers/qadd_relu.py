@@ -3,12 +3,16 @@ import struct
 
 from cocotb.triggers import FallingEdge, ReadOnly, ReadWrite, RisingEdge
 
+from tests.golden.qadd_relu import (
+    common_fixed_point_params,
+    qadd_relu_element,
+)
+
 from .base import IPDriver
 
 N = 8
 ELEMS = N * N
 MASK32 = 0xFFFFFFFF
-MAX_MULTIPLIER = 0x7FFFFFFF
 SHIFT_BITS = 6
 
 
@@ -17,67 +21,6 @@ def _pack_u8(values):
     for idx, value in enumerate(values):
         word |= (value & 0xFF) << (idx * 8)
     return word
-
-
-def _round_shift_rne(value, shift):
-    """Signed round-to-nearest, ties-to-even division by 2**shift."""
-    if shift == 0:
-        return value
-
-    magnitude = abs(value)
-    quotient, remainder = divmod(magnitude, 1 << shift)
-    half = 1 << (shift - 1)
-    if remainder > half or (remainder == half and quotient & 1):
-        quotient += 1
-    return -quotient if value < 0 else quotient
-
-
-def common_fixed_point_params(lhs_real, rhs_real, max_shift=31):
-    """Approximate two non-negative scale ratios with one binary point."""
-    if lhs_real < 0 or rhs_real < 0:
-        raise ValueError("real multipliers must be non-negative")
-
-    for shift in range(max_shift, -1, -1):
-        lhs_multiplier = round(lhs_real * (1 << shift))
-        rhs_multiplier = round(rhs_real * (1 << shift))
-        if (
-            0 <= lhs_multiplier <= MAX_MULTIPLIER
-            and 0 <= rhs_multiplier <= MAX_MULTIPLIER
-        ):
-            step = 1.0 / (1 << shift)
-            error_bound = 0.5 * step
-            lhs_error = abs(lhs_real - lhs_multiplier * step)
-            rhs_error = abs(rhs_real - rhs_multiplier * step)
-            tolerance = 1e-15
-            if (
-                lhs_error > error_bound + tolerance
-                or rhs_error > error_bound + tolerance
-            ):
-                raise ArithmeticError("fixed-point approximation is invalid")
-            return lhs_multiplier, rhs_multiplier, shift
-
-    raise ValueError("scale ratios do not fit signed i32 multipliers")
-
-
-def qadd_relu_element(
-    lhs,
-    rhs,
-    lhs_multiplier,
-    rhs_multiplier,
-    shift,
-    lhs_zero_point,
-    rhs_zero_point,
-    output_zero_point,
-    relu_enable,
-):
-    wide = (
-        (lhs - lhs_zero_point) * lhs_multiplier
-        + (rhs - rhs_zero_point) * rhs_multiplier
-    )
-    centered = _round_shift_rne(wide, shift)
-    if relu_enable:
-        centered = max(centered, 0)
-    return max(0, min(255, centered + output_zero_point))
 
 
 class QAddReluDriver(IPDriver):

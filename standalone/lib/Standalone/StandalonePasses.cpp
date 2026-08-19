@@ -256,6 +256,10 @@ public:
 
   LogicalResult matchAndRewrite(standalone::QAddReluOp op,
                                 PatternRewriter &rewriter) const override {
+    // Tensor-form operations are lowered to 8x8 tiles before runtime lowering.
+    if (!op.getResult().empty())
+      return failure();
+
     Location loc = op.getLoc();
     Value lhsMultiplier =
         arith::ConstantOp::create(rewriter, loc, op.getLhsMultiplierAttr());

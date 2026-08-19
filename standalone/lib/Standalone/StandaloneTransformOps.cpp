@@ -75,6 +75,38 @@ struct ConvRequantRewrite {
   int64_t outputZeroPoint;
 };
 
+struct QAddChain {
+  Operation *lhsDQ;
+  Operation *rhsDQ;
+  Operation *add;
+  Operation *relu;
+  Operation *quantize;
+};
+
+struct QAddQuantParams {
+  double lhsScale;
+  int64_t lhsZeroPoint;
+  double rhsScale;
+  int64_t rhsZeroPoint;
+  double outputScale;
+  int64_t outputZeroPoint;
+};
+
+struct QAddFixedPointParams {
+  int64_t lhsMultiplier;
+  int64_t rhsMultiplier;
+  int64_t shift;
+};
+
+struct QAddRewrite {
+  QAddChain chain;
+  RankedTensorType outputType;
+  QAddFixedPointParams fixedPoint;
+  int64_t lhsZeroPoint;
+  int64_t rhsZeroPoint;
+  int64_t outputZeroPoint;
+};
+
 static LogicalResult fail(std::string &error, StringRef message) {
   error = message.str();
   return failure();
@@ -323,6 +355,114 @@ static LogicalResult extractConvQuantParams(Operation *conv,
   return success();
 }
 
+static LogicalResult discoverQAddChain(Operation *add, QAddChain &chain,
+                                       std::string &error) {
+  if (!hasName(add, "onnx.Add"))
+    return fail(error, "target must be onnx.Add");
+  if (add->getNumOperands() != 2 || add->getNumResults() != 1)
+    return fail(error, "onnx.Add must have two operands and one result");
+
+  Operation *lhsDQ;
+  Operation *rhsDQ;
+  if (failed(getDQ(add->getOperand(0), "lhs", lhsDQ, error)) ||
+      failed(getDQ(add->getOperand(1), "rhs", rhsDQ, error)))
+    return failure();
+  if (lhsDQ->getNumResults() != 1 || rhsDQ->getNumResults() != 1)
+    return fail(error, "input DequantizeLinear must have one result");
+
+  auto lhsType = dyn_cast<RankedTensorType>(lhsDQ->getOperand(0).getType());
+  auto rhsType = dyn_cast<RankedTensorType>(rhsDQ->getOperand(0).getType());
+  if (!lhsType || lhsType.getRank() != 4 || !lhsType.hasStaticShape() ||
+      !isUI8(lhsType.getElementType()))
+    return fail(error, "quantized lhs must be a static rank-4 NCHW ui8 tensor");
+  if (rhsType != lhsType)
+    return fail(error, "quantized rhs must have the quantized lhs tensor type");
+
+  auto lhsFloatType = dyn_cast<RankedTensorType>(lhsDQ->getResult(0).getType());
+  auto rhsFloatType = dyn_cast<RankedTensorType>(rhsDQ->getResult(0).getType());
+  if (!lhsFloatType || lhsFloatType.getRank() != 4 ||
+      !lhsFloatType.hasStaticShape() || !isF32(lhsFloatType.getElementType()))
+    return fail(error,
+                "dequantized lhs must be a static rank-4 NCHW f32 tensor");
+  if (lhsFloatType.getShape() != lhsType.getShape())
+    return fail(error, "dequantized lhs shape must match quantized lhs shape");
+  if (rhsFloatType != lhsFloatType ||
+      add->getResult(0).getType() != lhsFloatType)
+    return fail(error, "Add operands and result must have one f32 tensor type");
+
+  if (!add->getResult(0).hasOneUse())
+    return fail(error, "onnx.Add result must have exactly one use");
+
+  Operation *next = *add->getResult(0).getUsers().begin();
+  Operation *relu = nullptr;
+  if (hasName(next, "onnx.Relu")) {
+    relu = next;
+    if (relu->getNumOperands() != 1 || relu->getNumResults() != 1 ||
+        relu->getOperand(0).getDefiningOp() != add ||
+        relu->getResult(0).getType() != lhsFloatType ||
+        !relu->getResult(0).hasOneUse())
+      return fail(error, "onnx.Relu must be the single consumer of Add");
+    next = *relu->getResult(0).getUsers().begin();
+  }
+
+  if (!hasName(next, "onnx.QuantizeLinear") || next->getNumOperands() != 3 ||
+      next->getNumResults() != 1)
+    return fail(
+        error, "onnx.Add must be followed by optional Relu and QuantizeLinear");
+
+  auto outputType = dyn_cast<RankedTensorType>(next->getResult(0).getType());
+  if (outputType != lhsType)
+    return fail(error,
+                "quantized output must have the quantized input tensor type");
+
+  chain = {lhsDQ, rhsDQ, add, relu, next};
+  return success();
+}
+
+static LogicalResult extractQAddQuantParams(Operation *add,
+                                            QAddQuantParams &params,
+                                            std::string &error) {
+  QAddChain chain;
+  if (failed(discoverQAddChain(add, chain, error)))
+    return failure();
+
+  DenseElementsAttr lhsScaleAttr;
+  DenseElementsAttr lhsZeroPointAttr;
+  DenseElementsAttr rhsScaleAttr;
+  DenseElementsAttr rhsZeroPointAttr;
+  DenseElementsAttr outputScaleAttr;
+  DenseElementsAttr outputZeroPointAttr;
+  if (failed(getDenseConstant(chain.lhsDQ->getOperand(1), "lhs scale",
+                              lhsScaleAttr, error)) ||
+      failed(getDenseConstant(chain.lhsDQ->getOperand(2), "lhs zero point",
+                              lhsZeroPointAttr, error)) ||
+      failed(getDenseConstant(chain.rhsDQ->getOperand(1), "rhs scale",
+                              rhsScaleAttr, error)) ||
+      failed(getDenseConstant(chain.rhsDQ->getOperand(2), "rhs zero point",
+                              rhsZeroPointAttr, error)) ||
+      failed(getDenseConstant(chain.quantize->getOperand(1), "output scale",
+                              outputScaleAttr, error)) ||
+      failed(getDenseConstant(chain.quantize->getOperand(2),
+                              "output zero point", outputZeroPointAttr, error)))
+    return failure();
+
+  if (failed(
+          readScalarFloat(lhsScaleAttr, "lhs scale", params.lhsScale, error)) ||
+      failed(readScalarUI8(lhsZeroPointAttr, "lhs zero point",
+                           params.lhsZeroPoint, error)) ||
+      failed(
+          readScalarFloat(rhsScaleAttr, "rhs scale", params.rhsScale, error)) ||
+      failed(readScalarUI8(rhsZeroPointAttr, "rhs zero point",
+                           params.rhsZeroPoint, error)) ||
+      failed(readScalarFloat(outputScaleAttr, "output scale",
+                             params.outputScale, error)) ||
+      failed(readScalarUI8(outputZeroPointAttr, "output zero point",
+                           params.outputZeroPoint, error)))
+    return failure();
+
+  return success();
+}
+
 static bool roundToNearestEven(double value, int64_t &result) {
   constexpr double maxMultiplier =
       static_cast<double>(std::numeric_limits<int32_t>::max());
@@ -428,6 +568,51 @@ static LogicalResult computeConvRequantFixedPoint(
   }
 
   return success();
+}
+
+static LogicalResult
+computeQAddFixedPoint(double lhsScale, double rhsScale, double outputScale,
+                      QAddFixedPointParams &fixedPointParams,
+                      std::string &error) {
+  if (!std::isfinite(lhsScale) || lhsScale <= 0.0)
+    return fail(error, "lhs scale must be positive and finite");
+  if (!std::isfinite(rhsScale) || rhsScale <= 0.0)
+    return fail(error, "rhs scale must be positive and finite");
+  if (!std::isfinite(outputScale) || outputScale <= 0.0)
+    return fail(error, "output scale must be positive and finite");
+
+  double lhsRealMultiplier = lhsScale / outputScale;
+  double rhsRealMultiplier = rhsScale / outputScale;
+  constexpr int64_t maxShift = 31;
+  for (int64_t candidateShift = maxShift; candidateShift >= 0;
+       --candidateShift) {
+    int64_t lhsMultiplier;
+    int64_t rhsMultiplier;
+    if (!roundToNearestEven(std::ldexp(lhsRealMultiplier, candidateShift),
+                            lhsMultiplier) ||
+        !roundToNearestEven(std::ldexp(rhsRealMultiplier, candidateShift),
+                            rhsMultiplier))
+      continue;
+
+    std::string approximationError;
+    if (failed(validateFixedPointApproximation(lhsRealMultiplier, lhsMultiplier,
+                                               candidateShift,
+                                               approximationError))) {
+      error = "lhs " + approximationError;
+      return failure();
+    }
+    if (failed(validateFixedPointApproximation(rhsRealMultiplier, rhsMultiplier,
+                                               candidateShift,
+                                               approximationError))) {
+      error = "rhs " + approximationError;
+      return failure();
+    }
+
+    fixedPointParams = {lhsMultiplier, rhsMultiplier, candidateShift};
+    return success();
+  }
+
+  return fail(error, "scale ratios do not fit signed i32 multipliers");
 }
 
 static LogicalResult readI64ArrayAttribute(Operation *op, StringRef name,
@@ -785,6 +970,182 @@ static Operation *createConvRequantOp(TransformRewriter &rewriter,
   return rewriter.create(state);
 }
 
+static LogicalResult readIntegerParam(Attribute attribute, StringRef label,
+                                      int64_t minimum, int64_t maximum,
+                                      int64_t &result, std::string &error) {
+  auto integer = dyn_cast<IntegerAttr>(attribute);
+  if (!integer)
+    return fail(error, (label + " parameter must be an integer").str());
+
+  result = integer.getValue().getSExtValue();
+  if (result < minimum || result > maximum) {
+    error = label.str() + " parameter is outside [" + std::to_string(minimum) +
+            ", " + std::to_string(maximum) + "]";
+    return failure();
+  }
+  return success();
+}
+
+static LogicalResult
+prepareQAddRewrite(Operation *lhsDQ, Operation *rhsDQ, Operation *add,
+                   Operation *relu, Operation *quantize,
+                   Attribute lhsMultiplierParam, Attribute rhsMultiplierParam,
+                   Attribute shiftParam, Attribute lhsZeroPointParam,
+                   Attribute rhsZeroPointParam, Attribute outputZeroPointParam,
+                   bool hasRelu, QAddRewrite &rewrite, std::string &error) {
+  QAddChain chain;
+  if (failed(discoverQAddChain(add, chain, error)))
+    return failure();
+
+  if (chain.lhsDQ != lhsDQ || chain.rhsDQ != rhsDQ)
+    return fail(error, "DequantizeLinear handles do not match Add operands");
+  if (chain.quantize != quantize)
+    return fail(error, "QuantizeLinear handle does not match the Add chain");
+  if (hasRelu ? chain.relu != relu : chain.relu != nullptr)
+    return fail(error, "optional Relu handle does not match the Add chain");
+
+  int64_t lhsMultiplier;
+  int64_t rhsMultiplier;
+  int64_t shift;
+  int64_t lhsZeroPoint;
+  int64_t rhsZeroPoint;
+  int64_t outputZeroPoint;
+  if (failed(readIntegerParam(lhsMultiplierParam, "lhs multiplier", 0,
+                              std::numeric_limits<int32_t>::max(),
+                              lhsMultiplier, error)) ||
+      failed(readIntegerParam(rhsMultiplierParam, "rhs multiplier", 0,
+                              std::numeric_limits<int32_t>::max(),
+                              rhsMultiplier, error)) ||
+      failed(readIntegerParam(shiftParam, "shift", 0, 63, shift, error)) ||
+      failed(readIntegerParam(lhsZeroPointParam, "lhs zero point", 0, 255,
+                              lhsZeroPoint, error)) ||
+      failed(readIntegerParam(rhsZeroPointParam, "rhs zero point", 0, 255,
+                              rhsZeroPoint, error)) ||
+      failed(readIntegerParam(outputZeroPointParam, "output zero point", 0, 255,
+                              outputZeroPoint, error)))
+    return failure();
+
+  QAddQuantParams graphParams;
+  if (failed(extractQAddQuantParams(add, graphParams, error)))
+    return failure();
+  if (lhsZeroPoint != graphParams.lhsZeroPoint ||
+      rhsZeroPoint != graphParams.rhsZeroPoint ||
+      outputZeroPoint != graphParams.outputZeroPoint)
+    return fail(error, "zero point parameters do not match the ONNX QDQ chain");
+
+  QAddFixedPointParams expectedFixedPoint;
+  if (failed(computeQAddFixedPoint(graphParams.lhsScale, graphParams.rhsScale,
+                                   graphParams.outputScale, expectedFixedPoint,
+                                   error)))
+    return failure();
+  if (lhsMultiplier != expectedFixedPoint.lhsMultiplier ||
+      rhsMultiplier != expectedFixedPoint.rhsMultiplier ||
+      shift != expectedFixedPoint.shift)
+    return fail(error,
+                "fixed-point parameters do not match the ONNX QDQ scales");
+
+  auto outputType =
+      cast<RankedTensorType>(chain.quantize->getResult(0).getType());
+  rewrite = {chain,        outputType,   expectedFixedPoint,
+             lhsZeroPoint, rhsZeroPoint, outputZeroPoint};
+  return success();
+}
+
+static Operation *createQAddOp(TransformRewriter &rewriter,
+                               const QAddRewrite &rewrite, bool hasRelu) {
+  Location loc = rewrite.chain.quantize->getLoc();
+  rewriter.setInsertionPoint(rewrite.chain.quantize);
+
+  Value output = tensor::EmptyOp::create(
+      rewriter, loc, rewrite.outputType.getShape(),
+      rewrite.outputType.getElementType(), rewrite.outputType.getEncoding());
+
+  OperationState state(loc, standalone::QAddReluOp::getOperationName());
+  state.addOperands({rewrite.chain.lhsDQ->getOperand(0),
+                     rewrite.chain.rhsDQ->getOperand(0), output});
+  state.addTypes(rewrite.outputType);
+  state.addAttribute("lhs_multiplier", rewriter.getI32IntegerAttr(
+                                           rewrite.fixedPoint.lhsMultiplier));
+  state.addAttribute("rhs_multiplier", rewriter.getI32IntegerAttr(
+                                           rewrite.fixedPoint.rhsMultiplier));
+  state.addAttribute("shift",
+                     rewriter.getI32IntegerAttr(rewrite.fixedPoint.shift));
+  state.addAttribute("lhs_zero_point",
+                     rewriter.getI32IntegerAttr(rewrite.lhsZeroPoint));
+  state.addAttribute("rhs_zero_point",
+                     rewriter.getI32IntegerAttr(rewrite.rhsZeroPoint));
+  state.addAttribute("output_zero_point",
+                     rewriter.getI32IntegerAttr(rewrite.outputZeroPoint));
+  state.addAttribute("relu_enable",
+                     rewriter.getI32IntegerAttr(hasRelu ? 1 : 0));
+  return rewriter.create(state);
+}
+
+static LogicalResult
+lowerONNXQAdd(TransformRewriter &rewriter, ArrayRef<Operation *> lhsDQOps,
+              ArrayRef<Operation *> rhsDQOps, ArrayRef<Operation *> addOps,
+              ArrayRef<Operation *> reluOps, ArrayRef<Operation *> quantizeOps,
+              ArrayRef<Attribute> lhsMultiplierParams,
+              ArrayRef<Attribute> rhsMultiplierParams,
+              ArrayRef<Attribute> shiftParams,
+              ArrayRef<Attribute> lhsZeroPointParams,
+              ArrayRef<Attribute> rhsZeroPointParams,
+              ArrayRef<Attribute> outputZeroPointParams, bool hasRelu,
+              SmallVectorImpl<Operation *> &newQAdds, std::string &error) {
+  size_t rewriteCount = addOps.size();
+  if (lhsDQOps.size() != rewriteCount || rhsDQOps.size() != rewriteCount ||
+      quantizeOps.size() != rewriteCount ||
+      (hasRelu && reluOps.size() != rewriteCount) ||
+      (!hasRelu && !reluOps.empty()) ||
+      lhsMultiplierParams.size() != rewriteCount ||
+      rhsMultiplierParams.size() != rewriteCount ||
+      shiftParams.size() != rewriteCount ||
+      lhsZeroPointParams.size() != rewriteCount ||
+      rhsZeroPointParams.size() != rewriteCount ||
+      outputZeroPointParams.size() != rewriteCount)
+    return fail(error, "QAdd operation and parameter handles must have equal "
+                       "lengths");
+
+  SmallVector<QAddRewrite, 1> rewrites;
+  rewrites.reserve(rewriteCount);
+  for (size_t index = 0; index < rewriteCount; ++index) {
+    QAddRewrite rewrite;
+    if (failed(prepareQAddRewrite(
+            lhsDQOps[index], rhsDQOps[index], addOps[index],
+            hasRelu ? reluOps[index] : nullptr, quantizeOps[index],
+            lhsMultiplierParams[index], rhsMultiplierParams[index],
+            shiftParams[index], lhsZeroPointParams[index],
+            rhsZeroPointParams[index], outputZeroPointParams[index], hasRelu,
+            rewrite, error))) {
+      error = "QAdd at index " + std::to_string(index) + ": " + error;
+      return failure();
+    }
+    rewrites.push_back(rewrite);
+  }
+
+  newQAdds.reserve(newQAdds.size() + rewriteCount);
+  for (const QAddRewrite &rewrite : rewrites) {
+    Operation *qadd = createQAddOp(rewriter, rewrite, hasRelu);
+    rewriter.replaceOp(rewrite.chain.quantize, qadd->getResults());
+    if (rewrite.chain.relu)
+      rewriter.eraseOp(rewrite.chain.relu);
+    rewriter.eraseOp(rewrite.chain.add);
+
+    if (rewrite.chain.lhsDQ == rewrite.chain.rhsDQ) {
+      if (rewrite.chain.lhsDQ->use_empty())
+        rewriter.eraseOp(rewrite.chain.lhsDQ);
+    } else {
+      if (rewrite.chain.lhsDQ->use_empty())
+        rewriter.eraseOp(rewrite.chain.lhsDQ);
+      if (rewrite.chain.rhsDQ->use_empty())
+        rewriter.eraseOp(rewrite.chain.rhsDQ);
+    }
+    newQAdds.push_back(qadd);
+  }
+
+  return success();
+}
+
 class StandaloneTransformDialectExtension
     : public TransformDialectExtension<StandaloneTransformDialectExtension> {
 public:
@@ -805,6 +1166,94 @@ public:
 };
 
 } // namespace
+
+void transform::ExtractONNXQAddQuantParamsOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  onlyReadsHandle(getAddMutable(), effects);
+  producesHandle(getOperation()->getOpResults(), effects);
+  onlyReadsPayload(effects);
+}
+
+DiagnosedSilenceableFailure transform::ExtractONNXQAddQuantParamsOp::applyToOne(
+    transform::TransformRewriter &rewriter, Operation *target,
+    transform::ApplyToEachResultList &results, TransformState &state) {
+  (void)rewriter;
+  (void)state;
+
+  QAddQuantParams params;
+  std::string error;
+  if (failed(extractQAddQuantParams(target, params, error)))
+    return emitSilenceableFailure(getLoc(), error);
+
+  MLIRContext *context = getContext();
+  results.push_back(FloatAttr::get(Float64Type::get(context), params.lhsScale));
+  results.push_back(
+      IntegerAttr::get(IntegerType::get(context, 64), params.lhsZeroPoint));
+  results.push_back(FloatAttr::get(Float64Type::get(context), params.rhsScale));
+  results.push_back(
+      IntegerAttr::get(IntegerType::get(context, 64), params.rhsZeroPoint));
+  results.push_back(
+      FloatAttr::get(Float64Type::get(context), params.outputScale));
+  results.push_back(
+      IntegerAttr::get(IntegerType::get(context, 64), params.outputZeroPoint));
+  return DiagnosedSilenceableFailure::success();
+}
+
+DiagnosedSilenceableFailure
+transform::ComputeQAddFixedPointOp::apply(TransformRewriter &rewriter,
+                                          TransformResults &results,
+                                          TransformState &state) {
+  (void)rewriter;
+
+  ArrayRef<Attribute> lhsScales = state.getParams(getLhsScale());
+  ArrayRef<Attribute> rhsScales = state.getParams(getRhsScale());
+  ArrayRef<Attribute> outputScales = state.getParams(getOutputScale());
+  size_t parameterCount = lhsScales.size();
+  if (rhsScales.size() != parameterCount ||
+      outputScales.size() != parameterCount)
+    return emitSilenceableFailure(
+        getLoc(), "QAdd scale parameter handles must have equal lengths");
+
+  MLIRContext *context = getContext();
+  Type i64 = IntegerType::get(context, 64);
+  SmallVector<Attribute> lhsMultiplierResults;
+  SmallVector<Attribute> rhsMultiplierResults;
+  SmallVector<Attribute> shiftResults;
+  lhsMultiplierResults.reserve(parameterCount);
+  rhsMultiplierResults.reserve(parameterCount);
+  shiftResults.reserve(parameterCount);
+
+  for (size_t index = 0; index < parameterCount; ++index) {
+    auto lhsScale = dyn_cast<FloatAttr>(lhsScales[index]);
+    auto rhsScale = dyn_cast<FloatAttr>(rhsScales[index]);
+    auto outputScale = dyn_cast<FloatAttr>(outputScales[index]);
+    if (!lhsScale || !rhsScale || !outputScale) {
+      std::string error = "QAdd scale set at index " + std::to_string(index) +
+                          " has unsupported types";
+      return emitSilenceableFailure(getLoc(), error);
+    }
+
+    QAddFixedPointParams fixedPoint;
+    std::string error;
+    if (failed(computeQAddFixedPoint(
+            lhsScale.getValueAsDouble(), rhsScale.getValueAsDouble(),
+            outputScale.getValueAsDouble(), fixedPoint, error))) {
+      error = "QAdd scale set at index " + std::to_string(index) + ": " + error;
+      return emitSilenceableFailure(getLoc(), error);
+    }
+
+    lhsMultiplierResults.push_back(
+        IntegerAttr::get(i64, fixedPoint.lhsMultiplier));
+    rhsMultiplierResults.push_back(
+        IntegerAttr::get(i64, fixedPoint.rhsMultiplier));
+    shiftResults.push_back(IntegerAttr::get(i64, fixedPoint.shift));
+  }
+
+  results.setParams(cast<OpResult>(getLhsMultiplier()), lhsMultiplierResults);
+  results.setParams(cast<OpResult>(getRhsMultiplier()), rhsMultiplierResults);
+  results.setParams(cast<OpResult>(getShift()), shiftResults);
+  return DiagnosedSilenceableFailure::success();
+}
 
 void transform::ExtractONNXConvQuantParamsOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
@@ -1031,6 +1480,106 @@ transform::LowerONNXConvReluRequantOp::apply(TransformRewriter &rewriter,
   results.set(cast<OpResult>(getAccumulate()), accumulates);
   results.set(cast<OpResult>(getRequant()), requants);
 
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform::LowerONNXQAddOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  consumesHandle(getLhsDqMutable(), effects);
+  consumesHandle(getRhsDqMutable(), effects);
+  consumesHandle(getAddMutable(), effects);
+  consumesHandle(getQuantizeMutable(), effects);
+  onlyReadsHandle(getLhsMultiplierMutable(), effects);
+  onlyReadsHandle(getRhsMultiplierMutable(), effects);
+  onlyReadsHandle(getShiftMutable(), effects);
+  onlyReadsHandle(getLhsZeroPointMutable(), effects);
+  onlyReadsHandle(getRhsZeroPointMutable(), effects);
+  onlyReadsHandle(getOutputZeroPointMutable(), effects);
+  producesHandle(getOperation()->getResults(), effects);
+  modifiesPayload(effects);
+}
+
+DiagnosedSilenceableFailure
+transform::LowerONNXQAddOp::apply(TransformRewriter &rewriter,
+                                  TransformResults &results,
+                                  TransformState &state) {
+  SmallVector<Operation *> lhsDQOps;
+  for (Operation *op : state.getPayloadOps(getLhsDq()))
+    lhsDQOps.push_back(op);
+  SmallVector<Operation *> rhsDQOps;
+  for (Operation *op : state.getPayloadOps(getRhsDq()))
+    rhsDQOps.push_back(op);
+  SmallVector<Operation *> addOps;
+  for (Operation *op : state.getPayloadOps(getAdd()))
+    addOps.push_back(op);
+  SmallVector<Operation *> quantizeOps;
+  for (Operation *op : state.getPayloadOps(getQuantize()))
+    quantizeOps.push_back(op);
+
+  SmallVector<Operation *> qadds;
+  std::string error;
+  if (failed(lowerONNXQAdd(
+          rewriter, lhsDQOps, rhsDQOps, addOps, {}, quantizeOps,
+          state.getParams(getLhsMultiplier()),
+          state.getParams(getRhsMultiplier()), state.getParams(getShift()),
+          state.getParams(getLhsZeroPoint()),
+          state.getParams(getRhsZeroPoint()),
+          state.getParams(getOutputZeroPoint()), false, qadds, error)))
+    return emitSilenceableFailure(getLoc(), error);
+
+  results.set(cast<OpResult>(getQadd()), qadds);
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform::LowerONNXQAddReluOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  consumesHandle(getLhsDqMutable(), effects);
+  consumesHandle(getRhsDqMutable(), effects);
+  consumesHandle(getAddMutable(), effects);
+  consumesHandle(getReluMutable(), effects);
+  consumesHandle(getQuantizeMutable(), effects);
+  onlyReadsHandle(getLhsMultiplierMutable(), effects);
+  onlyReadsHandle(getRhsMultiplierMutable(), effects);
+  onlyReadsHandle(getShiftMutable(), effects);
+  onlyReadsHandle(getLhsZeroPointMutable(), effects);
+  onlyReadsHandle(getRhsZeroPointMutable(), effects);
+  onlyReadsHandle(getOutputZeroPointMutable(), effects);
+  producesHandle(getOperation()->getResults(), effects);
+  modifiesPayload(effects);
+}
+
+DiagnosedSilenceableFailure
+transform::LowerONNXQAddReluOp::apply(TransformRewriter &rewriter,
+                                      TransformResults &results,
+                                      TransformState &state) {
+  SmallVector<Operation *> lhsDQOps;
+  for (Operation *op : state.getPayloadOps(getLhsDq()))
+    lhsDQOps.push_back(op);
+  SmallVector<Operation *> rhsDQOps;
+  for (Operation *op : state.getPayloadOps(getRhsDq()))
+    rhsDQOps.push_back(op);
+  SmallVector<Operation *> addOps;
+  for (Operation *op : state.getPayloadOps(getAdd()))
+    addOps.push_back(op);
+  SmallVector<Operation *> reluOps;
+  for (Operation *op : state.getPayloadOps(getRelu()))
+    reluOps.push_back(op);
+  SmallVector<Operation *> quantizeOps;
+  for (Operation *op : state.getPayloadOps(getQuantize()))
+    quantizeOps.push_back(op);
+
+  SmallVector<Operation *> qadds;
+  std::string error;
+  if (failed(lowerONNXQAdd(
+          rewriter, lhsDQOps, rhsDQOps, addOps, reluOps, quantizeOps,
+          state.getParams(getLhsMultiplier()),
+          state.getParams(getRhsMultiplier()), state.getParams(getShift()),
+          state.getParams(getLhsZeroPoint()),
+          state.getParams(getRhsZeroPoint()),
+          state.getParams(getOutputZeroPoint()), true, qadds, error)))
+    return emitSilenceableFailure(getLoc(), error);
+
+  results.set(cast<OpResult>(getQadd()), qadds);
   return DiagnosedSilenceableFailure::success();
 }
 

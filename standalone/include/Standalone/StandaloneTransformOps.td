@@ -173,4 +173,141 @@ def LowerONNXConvReluRequantOp
       "$output_zero_point attr-dict `:` functional-type(operands, results)";
 }
 
+def ExtractONNXQAddQuantParamsOp
+    : TransformDialectOp<"standalone.extract_onnx_qadd_qparams", [
+        TransformOpInterface,
+        TransformEachOpTrait,
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ]> {
+  let summary = "Extract quantization parameters around an ONNX residual Add";
+  let description = [{
+    Reads a handle to `onnx.Add` operations whose two operands are produced by
+    scalar per-tensor `onnx.DequantizeLinear` operations and whose result is
+    consumed by optional `onnx.Relu` and `onnx.QuantizeLinear` operations.
+
+    Both quantized inputs and the quantized output must be static rank-4 NCHW
+    uint8 tensors with identical shapes. All scales and zero points must be
+    scalar `onnx.Constant` values. The operation only reads the payload and
+    returns one parameter of each kind per Add.
+  }];
+
+  let arguments = (ins TransformHandleTypeInterface:$add);
+  let results = (outs
+      TransformParamTypeInterface:$lhs_scale,
+      TransformParamTypeInterface:$lhs_zero_point,
+      TransformParamTypeInterface:$rhs_scale,
+      TransformParamTypeInterface:$rhs_zero_point,
+      TransformParamTypeInterface:$output_scale,
+      TransformParamTypeInterface:$output_zero_point);
+
+  let assemblyFormat =
+      "$add attr-dict `:` functional-type(operands, results)";
+
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::transform::TransformRewriter &rewriter,
+        ::mlir::Operation *target,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
+}
+
+def ComputeQAddFixedPointOp
+    : TransformDialectOp<"standalone.compute_qadd_fixed_point", [
+        DeclareOpInterfaceMethods<TransformOpInterface>,
+        MemoryEffectsOpInterface,
+        ParamProducerTransformOpTrait
+      ]> {
+  let summary = "Compute shared fixed-point parameters for QADD_RELU";
+  let description = [{
+    Approximates `lhs_scale / output_scale` and
+    `rhs_scale / output_scale` as two non-negative signed-i32 multipliers with
+    one shared binary shift. Candidate shifts are considered from 31 down to
+    zero and coefficient rounding uses round-to-nearest, ties-to-even.
+
+    Operand lists are paired by position and must have equal lengths. The
+    operation produces one scalar lhs multiplier, rhs multiplier and shift per
+    residual Add.
+  }];
+
+  let arguments = (ins
+      TransformParamTypeInterface:$lhs_scale,
+      TransformParamTypeInterface:$rhs_scale,
+      TransformParamTypeInterface:$output_scale);
+  let results = (outs
+      TransformParamTypeInterface:$lhs_multiplier,
+      TransformParamTypeInterface:$rhs_multiplier,
+      TransformParamTypeInterface:$shift);
+
+  let assemblyFormat =
+      "$lhs_scale `,` $rhs_scale `,` $output_scale attr-dict `:` "
+      "functional-type(operands, results)";
+}
+
+def LowerONNXQAddOp
+    : TransformDialectOp<"standalone.lower_onnx_qadd", [
+        DeclareOpInterfaceMethods<TransformOpInterface>,
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ]> {
+  let summary = "Lower an ONNX QDQ Add to standalone.qadd_relu";
+  let description = [{
+    Replaces `DequantizeLinear + DequantizeLinear -> Add -> QuantizeLinear`
+    with tensor-form `standalone.qadd_relu` and `relu_enable = 0`. The new
+    operation consumes the original uint8 values before dequantization, so an
+    upstream Conv requantization boundary remains intact.
+  }];
+
+  let arguments = (ins
+      TransformHandleTypeInterface:$lhs_dq,
+      TransformHandleTypeInterface:$rhs_dq,
+      TransformHandleTypeInterface:$add,
+      TransformHandleTypeInterface:$quantize,
+      TransformParamTypeInterface:$lhs_multiplier,
+      TransformParamTypeInterface:$rhs_multiplier,
+      TransformParamTypeInterface:$shift,
+      TransformParamTypeInterface:$lhs_zero_point,
+      TransformParamTypeInterface:$rhs_zero_point,
+      TransformParamTypeInterface:$output_zero_point);
+  let results = (outs TransformHandleTypeInterface:$qadd);
+
+  let assemblyFormat =
+      "$lhs_dq `,` $rhs_dq `,` $add `,` $quantize `,` $lhs_multiplier `,` "
+      "$rhs_multiplier `,` $shift `,` $lhs_zero_point `,` $rhs_zero_point `,` "
+      "$output_zero_point attr-dict `:` functional-type(operands, results)";
+}
+
+def LowerONNXQAddReluOp
+    : TransformDialectOp<"standalone.lower_onnx_qadd_relu", [
+        DeclareOpInterfaceMethods<TransformOpInterface>,
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ]> {
+  let summary = "Lower an ONNX QDQ Add and ReLU to standalone.qadd_relu";
+  let description = [{
+    Replaces
+    `DequantizeLinear + DequantizeLinear -> Add -> Relu -> QuantizeLinear`
+    with tensor-form `standalone.qadd_relu` and `relu_enable = 1`. It otherwise
+    has the same quantization and shape contract as `lower_onnx_qadd`.
+  }];
+
+  let arguments = (ins
+      TransformHandleTypeInterface:$lhs_dq,
+      TransformHandleTypeInterface:$rhs_dq,
+      TransformHandleTypeInterface:$add,
+      TransformHandleTypeInterface:$relu,
+      TransformHandleTypeInterface:$quantize,
+      TransformParamTypeInterface:$lhs_multiplier,
+      TransformParamTypeInterface:$rhs_multiplier,
+      TransformParamTypeInterface:$shift,
+      TransformParamTypeInterface:$lhs_zero_point,
+      TransformParamTypeInterface:$rhs_zero_point,
+      TransformParamTypeInterface:$output_zero_point);
+  let results = (outs TransformHandleTypeInterface:$qadd);
+
+  let assemblyFormat =
+      "$lhs_dq `,` $rhs_dq `,` $add `,` $relu `,` $quantize `,` "
+      "$lhs_multiplier `,` $rhs_multiplier `,` $shift `,` $lhs_zero_point `,` "
+      "$rhs_zero_point `,` $output_zero_point attr-dict `:` "
+      "functional-type(operands, results)";
+}
+
 #endif // STANDALONE_TRANSFORM_OPS

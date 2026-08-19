@@ -60,19 +60,26 @@ def Standalone_SystolicMatmulOp
 }
 
 def Standalone_QAddReluOp
-    : Standalone_Op<"qadd_relu"> {
-  let summary = "8x8 quantized residual add with optional ReLU";
+    : Standalone_Op<"qadd_relu", [
+        DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+      ]> {
+  let summary = "Quantized residual add with optional ReLU";
   let description = [{
-    Adds two per-tensor uint8 activation tiles. Each input is centered by its
-    zero point and scaled into a shared fixed-point domain. The wide sum is
-    rounded once, optionally clamped by ReLU, and saturated into the output
-    per-tensor uint8 domain.
+    Adds two per-tensor uint8 activations. Each input is centered by its zero
+    point and scaled into a shared fixed-point domain. The wide sum is rounded
+    once, optionally clamped by ReLU, and saturated into the output per-tensor
+    uint8 domain.
+
+    The tensor form represents an entire static NCHW tensor in high-level IR
+    and returns the output tensor. The buffer form is the hardware tile
+    operation: it accepts two 8x8 input tiles, has no SSA result and writes the
+    output memref.
   }];
 
   let arguments = (ins
-    Arg<AnyMemRef, "", [MemRead]>:$lhs,
-    Arg<AnyMemRef, "", [MemRead]>:$rhs,
-    Arg<AnyMemRef, "", [MemWrite]>:$out,
+    AnyShaped:$lhs,
+    AnyShaped:$rhs,
+    AnyShaped:$out,
     I32Attr:$lhs_multiplier,
     I32Attr:$rhs_multiplier,
     I32Attr:$shift,
@@ -82,10 +89,13 @@ def Standalone_QAddReluOp
     I32Attr:$relu_enable
   );
 
+  let results = (outs Variadic<AnyRankedTensor>:$result);
+
   let assemblyFormat = [{
     `ins` `(` $lhs `,` $rhs `:` type($lhs) `,` type($rhs) `)`
     `outs` `(` $out `:` type($out) `)`
     attr-dict
+    (`->` type($result)^)?
   }];
 
   let hasVerifier = 1;

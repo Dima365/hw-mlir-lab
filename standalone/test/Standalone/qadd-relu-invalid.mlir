@@ -5,7 +5,7 @@ module {
       %lhs: memref<8x7xi8>,
       %rhs: memref<8x8xi8>,
       %out: memref<8x8xi8>) {
-    // expected-error @+1 {{requires lhs to be memref<8x8xi8>}}
+    // expected-error @+1 {{requires buffer lhs to be memref<8x8xi8>}}
     standalone.qadd_relu
       ins(%lhs, %rhs : memref<8x7xi8>, memref<8x8xi8>)
       outs(%out : memref<8x8xi8>)
@@ -19,6 +19,30 @@ module {
         relu_enable = 0 : i32
       }
     return
+  }
+}
+
+// -----
+
+module {
+  func.func @bad_tensor_rhs_shape(
+      %lhs: tensor<1x8x2x4xui8>,
+      %rhs: tensor<1x8x2x3xui8>) -> tensor<1x8x2x4xui8> {
+    %out = tensor.empty() : tensor<1x8x2x4xui8>
+    // expected-error @+1 {{requires tensor rhs and out to have the lhs tensor type}}
+    %result = standalone.qadd_relu
+      ins(%lhs, %rhs : tensor<1x8x2x4xui8>, tensor<1x8x2x3xui8>)
+      outs(%out : tensor<1x8x2x4xui8>)
+      {
+        lhs_multiplier = 1 : i32,
+        rhs_multiplier = 1 : i32,
+        shift = 0 : i32,
+        lhs_zero_point = 0 : i32,
+        rhs_zero_point = 0 : i32,
+        output_zero_point = 0 : i32,
+        relu_enable = 0 : i32
+      } -> tensor<1x8x2x4xui8>
+    return %result : tensor<1x8x2x4xui8>
   }
 }
 

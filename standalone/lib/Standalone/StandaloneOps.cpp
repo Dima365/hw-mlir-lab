@@ -23,12 +23,38 @@ static bool is8x8IntegerMemRef(Type type, unsigned width) {
 }
 
 LogicalResult standalone::QAddReluOp::verify() {
-  if (!is8x8IntegerMemRef(getLhs().getType(), 8))
-    return emitOpError("requires lhs to be memref<8x8xi8>");
-  if (!is8x8IntegerMemRef(getRhs().getType(), 8))
-    return emitOpError("requires rhs to be memref<8x8xi8>");
-  if (!is8x8IntegerMemRef(getOut().getType(), 8))
-    return emitOpError("requires out to be memref<8x8xi8>");
+  auto lhsMemRef = dyn_cast<MemRefType>(getLhs().getType());
+  auto rhsMemRef = dyn_cast<MemRefType>(getRhs().getType());
+  auto outMemRef = dyn_cast<MemRefType>(getOut().getType());
+  bool hasAnyMemRef = lhsMemRef || rhsMemRef || outMemRef;
+
+  if (hasAnyMemRef) {
+    if (!lhsMemRef || !rhsMemRef || !outMemRef)
+      return emitOpError("does not allow mixed tensor and memref operands");
+    if (!getResult().empty())
+      return emitOpError("buffer form must not have an SSA result");
+    if (!is8x8IntegerMemRef(getLhs().getType(), 8))
+      return emitOpError("requires buffer lhs to be memref<8x8xi8>");
+    if (!is8x8IntegerMemRef(getRhs().getType(), 8))
+      return emitOpError("requires buffer rhs to be memref<8x8xi8>");
+    if (!is8x8IntegerMemRef(getOut().getType(), 8))
+      return emitOpError("requires buffer out to be memref<8x8xi8>");
+  } else {
+    auto lhsTensor = dyn_cast<RankedTensorType>(getLhs().getType());
+    auto rhsTensor = dyn_cast<RankedTensorType>(getRhs().getType());
+    auto outTensor = dyn_cast<RankedTensorType>(getOut().getType());
+    if (!lhsTensor || !rhsTensor || !outTensor)
+      return emitOpError("requires all operands to be ranked tensors");
+    if (getResult().size() != 1 || getResult().front().getType() != outTensor)
+      return emitOpError(
+          "tensor form requires one result with the output tensor type");
+    if (lhsTensor.getRank() != 4 || !lhsTensor.hasStaticShape() ||
+        !lhsTensor.getElementType().isUnsignedInteger(8))
+      return emitOpError("requires tensor lhs to be static rank-4 NCHW ui8");
+    if (rhsTensor != lhsTensor || outTensor != lhsTensor)
+      return emitOpError(
+          "requires tensor rhs and out to have the lhs tensor type");
+  }
 
   if (getLhsMultiplierAttr().getInt() < 0 ||
       getRhsMultiplierAttr().getInt() < 0) {
@@ -56,6 +82,22 @@ LogicalResult standalone::QAddReluOp::verify() {
     return emitOpError("requires relu_enable to be 0 or 1");
 
   return success();
+}
+
+void standalone::QAddReluOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  if (!isa<MemRefType>(getLhs().getType()))
+    return;
+
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       &getOperation()->getOpOperand(0), 0, false,
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       &getOperation()->getOpOperand(1), 0, false,
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       &getOperation()->getOpOperand(2), 0, false,
+                       SideEffects::DefaultResource::get());
 }
 
 LogicalResult standalone::ConvAccumulateOp::verify() {
