@@ -39,17 +39,22 @@ The cocotb testbench creates a Unix socket and a ready file:
 /tmp/systolic_cocotb.ready
 ```
 
-After that, cocotb starts `<app>`. The runtime function `systolic_matmul_8x8`
-from `interface/interface.c` connects to this socket.
+After that, cocotb starts `<app>`. The runtime functions
+`systolic_matmul_8x8` and `systolic_u8s8_matmul_8x8` from
+`interface/interface.c` connect to this socket.
 
 ## 3. Drive RTL
 
 For each matmul request, cocotb:
 
-- reads the `i8` A and B matrices;
+- reads `a_is_unsigned` and `a_zero_point` command parameters;
+- reads signed `i8` A or quantized `uint8` A and signed `i8` B;
 - reads the `i32` C accumulator;
-- loads A, B, and C into `a_flat`, `b_flat`, and `c_in_flat`;
+- loads the matrices and quantization parameters into the RTL ports;
 - asserts `start`;
 - waits for `done`;
 - reads `c_out_flat`;
 - returns the `i32` result back to the app.
+
+The signed mode computes `C = C_in + A_i8 * B_i8`. The quantized mode computes
+`C = C_in + (A_u8 - a_zero_point) * B_i8`.

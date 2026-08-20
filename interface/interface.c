@@ -210,6 +210,22 @@ static void unpack_u8_8x8(const uint8_t src[64], MemRef2DU8 *dst) {
       base[i * dst->strides[0] + j * dst->strides[1]] = src[i * 8 + j];
 }
 
+static void invoke_matmul_8x8(const uint8_t a_buf[64], const int8_t b_buf[64],
+                              int32_t c_buf[64], int32_t a_is_unsigned,
+                              int32_t a_zero_point) {
+  // input = a(bits x 64) || b(i8 x 64) || c_in(i32 x 64)
+  uint8_t in[64 + 64 + 64 * sizeof(int32_t)];
+  memcpy(in, a_buf, 64);
+  memcpy(in + 64, b_buf, 64);
+  memcpy(in + 128, c_buf, 64 * sizeof(int32_t));
+
+  // Signed matmul ignores a_zero_point. Quantized matmul computes
+  // (A_u8 - a_zero_point) * B_i8.
+  int32_t params[2] = {a_is_unsigned, a_zero_point};
+  accel_invoke(OP_MATMUL, in, sizeof(in), c_buf, 64 * sizeof(int32_t), params,
+               sizeof(params));
+}
+
 void systolic_matmul_8x8(
     int8_t *a_allocated, int8_t *a_aligned, int64_t a_offset, int64_t a_size0,
     int64_t a_size1, int64_t a_stride0, int64_t a_stride1,
@@ -239,13 +255,45 @@ void systolic_matmul_8x8(
   pack_i8_8x8(&b, b_buf);
   pack_i32_8x8(&c, c_buf);
 
-  // input = a(i8x64) || b(i8x64) || c_in(i32x64), output = c(i32x64)
-  uint8_t in[sizeof(a_buf) + sizeof(b_buf) + sizeof(c_buf)];
-  memcpy(in, a_buf, sizeof(a_buf));
-  memcpy(in + sizeof(a_buf), b_buf, sizeof(b_buf));
-  memcpy(in + sizeof(a_buf) + sizeof(b_buf), c_buf, sizeof(c_buf));
+  invoke_matmul_8x8((const uint8_t *)a_buf, b_buf, c_buf, 0, 0);
+  unpack_i32_8x8(c_buf, &c);
+}
 
-  accel_invoke(OP_MATMUL, in, sizeof(in), c_buf, sizeof(c_buf), NULL, 0);
+void systolic_u8s8_matmul_8x8(
+    uint8_t *a_allocated, uint8_t *a_aligned, int64_t a_offset,
+    int64_t a_size0, int64_t a_size1, int64_t a_stride0, int64_t a_stride1,
+    int8_t *b_allocated, int8_t *b_aligned, int64_t b_offset, int64_t b_size0,
+    int64_t b_size1, int64_t b_stride0, int64_t b_stride1,
+    int32_t *c_allocated, int32_t *c_aligned, int64_t c_offset,
+    int64_t c_size0, int64_t c_size1, int64_t c_stride0, int64_t c_stride1,
+    int32_t a_zero_point) {
+  MemRef2DU8 a = {a_allocated, a_aligned, a_offset,
+                  {a_size0, a_size1},
+                  {a_stride0, a_stride1}};
+  MemRef2DI8 b = {b_allocated, b_aligned, b_offset,
+                  {b_size0, b_size1},
+                  {b_stride0, b_stride1}};
+  MemRef2DI32 c = {c_allocated, c_aligned, c_offset,
+                   {c_size0, c_size1},
+                   {c_stride0, c_stride1}};
+
+  check_8x8_u8_memref("lhs", &a);
+  check_8x8_i8_memref("rhs", &b);
+  check_8x8_i32_memref("acc", &c);
+  if (a_zero_point < 0 || a_zero_point > UINT8_MAX) {
+    fprintf(stderr,
+            "systolic runtime: A zero point must be in [0, 255]\n");
+    abort();
+  }
+
+  uint8_t a_buf[64];
+  int8_t b_buf[64];
+  int32_t c_buf[64];
+  pack_u8_8x8(&a, a_buf);
+  pack_i8_8x8(&b, b_buf);
+  pack_i32_8x8(&c, c_buf);
+
+  invoke_matmul_8x8(a_buf, b_buf, c_buf, 1, a_zero_point);
   unpack_i32_8x8(c_buf, &c);
 }
 

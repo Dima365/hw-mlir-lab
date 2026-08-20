@@ -18,10 +18,15 @@ Input: `interface/interface.c`
 
 Output: `<object-dir>/interface.o`
 
-The interface bridge is compiled into an object file. It provides the integer
-implementation of `systolic_matmul_8x8`, which connects to the Python/Verilator
-simulator through a Unix socket. The runtime ABI uses `i8` inputs and an `i32`
-accumulator.
+The interface bridge is compiled into an object file. It provides
+`systolic_matmul_8x8` for signed `i8` inputs and
+`systolic_u8s8_matmul_8x8` for quantized `uint8` activations, signed `i8`
+weights, and an activation zero point. Both functions connect to the
+Python/Verilator simulator through a Unix socket and use an `i32` accumulator.
+
+The current `standalone.systolic_matmul` lowering calls the signed function.
+The quantized function is the runtime target for the future integer Conv tile
+lowering.
 
 ## 2. MLIR Program Object
 

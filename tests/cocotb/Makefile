@@ -17,8 +17,8 @@ MODULE ?= test_socket
 # Stays under sim_build/.
 SIM_BUILD ?= sim_build/$(IP)
 
-# Drivers and the manifest loader live here; expose them to the harness.
-export PYTHONPATH := $(abspath .):$(PYTHONPATH)
+# Drivers live here, while shared golden models are imported from the repo root.
+export PYTHONPATH := $(abspath .):$(REPO_ROOT):$(PYTHONPATH)
 
 EXTRA_ARGS += $(shell python3 ips.py gargs $(IP))
 EXTRA_ARGS += --trace-fst --trace-depth 99 --trace-max-array 1024 --trace-max-width 1024
