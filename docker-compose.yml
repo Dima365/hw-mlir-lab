@@ -3,7 +3,8 @@ services:
     build:
       context: .
       args:
-        LLVM_COMMIT: ${LLVM_COMMIT:-8a688983ab0b5aa3ac3cfbcd94d3727d023a169e}
+        LLVM_REPOSITORY: ${LLVM_REPOSITORY:-https://github.com/Dima365/llvm-project.git}
+        LLVM_COMMIT: ${LLVM_COMMIT:-bc11b5680d41ea81de5822568166a470f1ea26bf}
     working_dir: /work
     volumes:
       - .:/work

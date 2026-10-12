@@ -11,9 +11,10 @@
 //   activated = relu_enable ? max(scaled, 0) : scaled
 //   out = saturate_uint8(activated + output_zero_point)
 //
-// The accumulator must already include bias and any compiler-generated input
-// zero-point correction. The datapath is combinational. `done` mirrors `start`
-// one cycle later, matching the handshake used by the other demo IP blocks.
+// The accumulator must already include bias. Activation zero-point centering
+// is performed while the systolic array forms the accumulator. The datapath is
+// combinational. `done` mirrors `start` one cycle later, matching the handshake
+// used by the other demo IP blocks.
 module conv_requant #(
     parameter int N = 8,
     parameter int ACC_W = 32,

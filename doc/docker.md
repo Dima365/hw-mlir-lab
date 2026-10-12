@@ -7,7 +7,8 @@ and `standalone-opt` stay version-compatible.
 
 ## Toolchain Layout
 
-The image builds LLVM from a pinned `llvm-project` commit and installs it into:
+The image builds the Dima365 LLVM fork at commit
+`bc11b5680d41ea81de5822568166a470f1ea26bf` and installs it into:
 
 ```text
 /opt/llvm
@@ -45,10 +46,12 @@ The project is mounted into the container as:
 make docker-build
 ```
 
-To override the LLVM commit:
+This revision provides quantized NCHW/FCHW im2col and separate input/weight
+cast attributes. An arbitrary upstream revision is not a compatible substitute.
+To override the repository and commit with a compatible revision:
 
 ```bash
-LLVM_COMMIT=<llvm-project-commit> make docker-build
+LLVM_REPOSITORY=<repository-url> LLVM_COMMIT=<commit> make docker-build
 ```
 
 ## Build standalone-opt

@@ -1,4 +1,4 @@
-.PHONY: docker-build standalone demo demo-qadd-relu demo-conv-requant test shell docker-config clean-generated clean-standalone
+.PHONY: docker-build standalone demo demo-qadd-relu demo-conv-requant demo-resnet-blocks lower-resnet18-blocks test shell docker-config clean-generated clean-standalone
 
 docker-build:
 	docker compose build
@@ -14,6 +14,12 @@ demo-qadd-relu: standalone
 
 demo-conv-requant: standalone
 	docker compose run --rm dev ./demo/run_conv_requant.sh
+
+demo-resnet-blocks: standalone
+	docker compose run --rm dev ./demo/run_resnet_blocks.sh
+
+lower-resnet18-blocks: standalone
+	docker compose run --rm dev ./projects/resnet18/lower_resnet18_blocks.sh
 
 test: standalone
 	docker compose run --rm dev python tests/run_matmul_tests.py

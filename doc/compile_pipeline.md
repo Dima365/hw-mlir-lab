@@ -24,9 +24,12 @@ The interface bridge is compiled into an object file. It provides
 weights, and an activation zero point. Both functions connect to the
 Python/Verilator simulator through a Unix socket and use an `i32` accumulator.
 
-The current `standalone.systolic_matmul` lowering calls the signed function.
-The quantized function is the runtime target for the future integer Conv tile
-lowering.
+The `standalone.systolic_matmul` lowering calls the signed function.
+`standalone.systolic_u8s8_matmul`, produced by converting the marked Linalg
+u8s8 microkernels, calls the quantized function. Tiled Linalg operands may be
+strided subviews of larger matrices. Runtime declarations use dynamic strided
+memref layouts, and the C bridge reads offset and stride fields while packing
+each hardware `8x8` request.
 
 ## 2. MLIR Program Object
 

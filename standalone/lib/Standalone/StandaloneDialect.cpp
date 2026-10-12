@@ -25,4 +25,5 @@ void StandaloneDialect::initialize() {
 #include "Standalone/StandaloneOps.cpp.inc"
       >();
   registerTypes();
+  registerEpilogueTilingInterfaces(getContext());
 }

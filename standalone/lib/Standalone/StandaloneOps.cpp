@@ -17,9 +17,32 @@ using namespace mlir;
 static bool is8x8IntegerMemRef(Type type, unsigned width) {
   auto memrefType = dyn_cast<MemRefType>(type);
   return memrefType && memrefType.getRank() == 2 &&
-         memrefType.getDimSize(0) == 8 &&
-         memrefType.getDimSize(1) == 8 &&
+         memrefType.getDimSize(0) == 8 && memrefType.getDimSize(1) == 8 &&
          memrefType.getElementType().isInteger(width);
+}
+
+LogicalResult standalone::SystolicU8S8MatmulOp::verify() {
+  auto lhsType = dyn_cast<MemRefType>(getLhs().getType());
+  auto rhsType = dyn_cast<MemRefType>(getRhs().getType());
+  auto accType = dyn_cast<MemRefType>(getAcc().getType());
+
+  if (!lhsType || lhsType.getShape() != ArrayRef<int64_t>({8, 8}) ||
+      !(lhsType.getElementType().isUnsignedInteger(8) ||
+        lhsType.getElementType().isSignlessInteger(8)))
+    return emitOpError("requires lhs to be memref<8x8xi8> or memref<8x8xui8>");
+  if (!rhsType || rhsType.getShape() != ArrayRef<int64_t>({8, 8}) ||
+      !rhsType.getElementType().isInteger(8) ||
+      rhsType.getElementType().isUnsignedInteger())
+    return emitOpError("requires rhs to be memref<8x8xi8>");
+  if (!accType || accType.getShape() != ArrayRef<int64_t>({8, 8}) ||
+      !accType.getElementType().isInteger(32))
+    return emitOpError("requires acc to be memref<8x8xi32>");
+
+  int64_t lhsZeroPoint = getLhsZeroPointAttr().getInt();
+  if (lhsZeroPoint < 0 || lhsZeroPoint > 255)
+    return emitOpError("requires lhs_zero_point in [0, 255]");
+
+  return success();
 }
 
 LogicalResult standalone::QAddReluOp::verify() {
@@ -48,9 +71,11 @@ LogicalResult standalone::QAddReluOp::verify() {
     if (getResult().size() != 1 || getResult().front().getType() != outTensor)
       return emitOpError(
           "tensor form requires one result with the output tensor type");
-    if (lhsTensor.getRank() != 4 || !lhsTensor.hasStaticShape() ||
+    if ((lhsTensor.getRank() != 4 && lhsTensor.getRank() != 2) ||
+        !lhsTensor.hasStaticShape() ||
         !lhsTensor.getElementType().isUnsignedInteger(8))
-      return emitOpError("requires tensor lhs to be static rank-4 NCHW ui8");
+      return emitOpError("requires tensor lhs to be static rank-4 NCHW ui8 "
+                         "or rank-2 [M, C] ui8");
     if (rhsTensor != lhsTensor || outTensor != lhsTensor)
       return emitOpError(
           "requires tensor rhs and out to have the lhs tensor type");
@@ -100,77 +125,6 @@ void standalone::QAddReluOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
-LogicalResult standalone::ConvAccumulateOp::verify() {
-  auto inputType = dyn_cast<RankedTensorType>(getInput().getType());
-  auto weightType = dyn_cast<RankedTensorType>(getWeight().getType());
-  auto biasType = dyn_cast<RankedTensorType>(getBias().getType());
-  auto resultType = dyn_cast<RankedTensorType>(getResult().getType());
-
-  if (!inputType || inputType.getRank() != 4 || !inputType.hasStaticShape() ||
-      !inputType.getElementType().isUnsignedInteger(8))
-    return emitOpError("requires input to be a static rank-4 NCHW ui8 tensor");
-  if (!weightType || weightType.getRank() != 4 ||
-      !weightType.hasStaticShape() ||
-      !(weightType.getElementType().isSignlessInteger(8) ||
-        weightType.getElementType().isSignedInteger(8)))
-    return emitOpError("requires weight to be a static rank-4 OIHW i8 tensor");
-  if (!biasType || biasType.getRank() != 1 || !biasType.hasStaticShape() ||
-      !(biasType.getElementType().isSignlessInteger(32) ||
-        biasType.getElementType().isSignedInteger(32)))
-    return emitOpError("requires bias to be a static rank-1 i32 tensor");
-  if (!resultType || resultType.getRank() != 4 ||
-      !resultType.hasStaticShape() ||
-      !(resultType.getElementType().isSignlessInteger(32) ||
-        resultType.getElementType().isSignedInteger(32)))
-    return emitOpError("requires result to be a static rank-4 NCHW i32 tensor");
-
-  int64_t inputZeroPoint = getInputZeroPointAttr().getInt();
-  if (inputZeroPoint < 0 || inputZeroPoint > 255)
-    return emitOpError("requires input_zero_point in [0, 255]");
-  if (getGroupAttr().getInt() != 1)
-    return emitOpError("currently requires group = 1");
-
-  ArrayRef<int64_t> strides = getStrides();
-  ArrayRef<int64_t> pads = getPads();
-  ArrayRef<int64_t> dilations = getDilations();
-  if (strides.size() != 2 || strides[0] <= 0 || strides[1] <= 0)
-    return emitOpError("requires two positive strides");
-  if (dilations.size() != 2 || dilations[0] <= 0 || dilations[1] <= 0)
-    return emitOpError("requires two positive dilations");
-  if (pads.size() != 4 ||
-      llvm::any_of(pads, [](int64_t value) { return value < 0; }))
-    return emitOpError("requires four non-negative pads");
-
-  int64_t batch = inputType.getDimSize(0);
-  int64_t inputChannels = inputType.getDimSize(1);
-  int64_t inputHeight = inputType.getDimSize(2);
-  int64_t inputWidth = inputType.getDimSize(3);
-  int64_t outputChannels = weightType.getDimSize(0);
-  int64_t kernelHeight = weightType.getDimSize(2);
-  int64_t kernelWidth = weightType.getDimSize(3);
-
-  if (weightType.getDimSize(1) != inputChannels)
-    return emitOpError("requires weight input channels to match input C");
-  if (biasType.getDimSize(0) != outputChannels)
-    return emitOpError("requires bias length to match weight Cout");
-
-  int64_t effectiveKernelHeight = dilations[0] * (kernelHeight - 1) + 1;
-  int64_t effectiveKernelWidth = dilations[1] * (kernelWidth - 1) + 1;
-  int64_t heightNumerator =
-      inputHeight + pads[0] + pads[2] - effectiveKernelHeight;
-  int64_t widthNumerator =
-      inputWidth + pads[1] + pads[3] - effectiveKernelWidth;
-  if (heightNumerator < 0 || widthNumerator < 0)
-    return emitOpError("has a kernel larger than the padded input");
-
-  SmallVector<int64_t> expectedResultShape = {batch, outputChannels,
-                                              heightNumerator / strides[0] + 1,
-                                              widthNumerator / strides[1] + 1};
-  if (resultType.getShape() != ArrayRef<int64_t>(expectedResultShape))
-    return emitOpError("result shape does not match convolution geometry");
-
-  return success();
-}
 
 void standalone::ConvRequantOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
@@ -226,9 +180,11 @@ LogicalResult standalone::ConvRequantOp::verify() {
     if (getResult().size() != 1 || getResult().front().getType() != outTensor)
       return emitOpError(
           "tensor form requires one result with the output tensor type");
-    if (accTensor.getRank() != 4 || !accTensor.hasStaticShape() ||
+    if ((accTensor.getRank() != 4 && accTensor.getRank() != 2) ||
+        !accTensor.hasStaticShape() ||
         !accTensor.getElementType().isInteger(32))
-      return emitOpError("requires tensor acc to be static rank-4 NCHW i32");
+      return emitOpError("requires tensor acc to be static rank-4 NCHW i32 "
+                         "or rank-2 [M, C] i32");
     if (outTensor.getShape() != accTensor.getShape() ||
         !outTensor.getElementType().isUnsignedInteger(8))
       return emitOpError(

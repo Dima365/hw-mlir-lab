@@ -107,12 +107,17 @@ def LowerONNXConvRequantOp
         DeclareOpInterfaceMethods<TransformOpInterface>,
         DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
       ]> {
-  let summary = "Lower ONNX QDQ Conv to integer standalone operations";
+  let summary = "Lower ONNX QDQ Conv to Linalg convolution and CONV_REQUANT";
   let description = [{
     Replaces an `onnx.Conv -> onnx.QuantizeLinear` QDQ chain with
-    `standalone.conv_accumulate -> standalone.conv_requant`. Raw quantized
+    `linalg.conv_2d_nchw_fchw_q -> standalone.conv_requant`. Raw quantized
     activation, weight and bias values are taken from the three
     `onnx.DequantizeLinear` inputs of Conv.
+
+    The input is padded with its zero point, bias initializes the NCHW
+    accumulator through linalg.broadcast, and explicit input_cast/weight_cast
+    attributes select unsigned/signed arithmetic on signless i8 storage.
+    The accumulate result handle refers to the new Linalg convolution.
 
     Multipliers, shifts and the output zero point are parameter handles
     produced by `compute_conv_requant_fixed_point` and
@@ -148,10 +153,10 @@ def LowerONNXConvReluRequantOp
         DeclareOpInterfaceMethods<TransformOpInterface>,
         DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
       ]> {
-  let summary = "Lower ONNX QDQ Conv and ReLU to integer standalone operations";
+  let summary = "Lower ONNX QDQ Conv and ReLU to Linalg convolution and CONV_REQUANT";
   let description = [{
     Replaces an `onnx.Conv -> onnx.Relu -> onnx.QuantizeLinear` chain with
-    `standalone.conv_accumulate -> standalone.conv_requant`. It has the same
+    `linalg.conv_2d_nchw_fchw_q -> standalone.conv_requant`. It has the same
     quantization and shape contract as `lower_onnx_conv_requant`, and sets
     `relu_enable = 1` on the requantization operation. Conv, ReLU and
     QuantizeLinear are consumed and erased by the rewrite.

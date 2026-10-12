@@ -3,6 +3,9 @@ add_mlir_dialect_library(MLIRStandalone
         StandaloneDialect.cpp
         StandaloneOps.cpp
         StandalonePasses.cpp
+        StandaloneTilePasses.cpp
+        StandaloneEpilogueFusion.cpp
+        StandaloneTilingInterfaces.cpp
         StandaloneTransformOps.cpp
 
         ADDITIONAL_HEADER_DIRS
@@ -19,7 +22,12 @@ add_mlir_dialect_library(MLIRStandalone
         MLIRArithDialect
         MLIRFuncDialect
         MLIRLinalgDialect
+        MLIRLinalgTransforms
         MLIRMemRefDialect
+        MLIRSCFDialect
+        MLIRSCFTransforms
+        MLIRTilingInterface
+        MLIRDestinationStyleOpInterface
         MLIRTensorDialect
         MLIRTransformDialect
         MLIRTransformDialectInterfaces

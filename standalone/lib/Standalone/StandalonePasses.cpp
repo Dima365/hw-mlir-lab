@@ -8,8 +8,8 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -23,6 +23,7 @@ namespace mlir::standalone {
 #define GEN_PASS_DEF_STANDALONESWITCHBARFOO
 #define GEN_PASS_DEF_CONVERTLINALGMATMULTOSYSTOLIC
 #define GEN_PASS_DEF_LOWERSYSTOLICTOFUNCCALL
+#define GEN_PASS_DEF_LOWERSYSTOLICU8S8TOFUNCCALL
 #define GEN_PASS_DEF_LOWERQADDRELUTOFUNCCALL
 #define GEN_PASS_DEF_LOWERCONVREQUANTTOFUNCCALL
 #define GEN_PASS_DEF_CREATECINTERFACEENTRYWRAPPERS
@@ -59,8 +60,7 @@ public:
 static bool is8x8IntegerMemRef(Type type, unsigned width) {
   auto memrefType = dyn_cast<MemRefType>(type);
   return memrefType && memrefType.getRank() == 2 &&
-         memrefType.getDimSize(0) == 8 &&
-         memrefType.getDimSize(1) == 8 &&
+         memrefType.getDimSize(0) == 8 && memrefType.getDimSize(1) == 8 &&
          memrefType.getElementType().isInteger(width);
 }
 
@@ -80,8 +80,8 @@ public:
         !is8x8IntegerMemRef(acc.getType(), 32))
       return failure();
 
-    rewriter.replaceOpWithNewOp<standalone::SystolicMatmulOp>(
-        op, lhs, rhs, acc);
+    rewriter.replaceOpWithNewOp<standalone::SystolicMatmulOp>(op, lhs, rhs,
+                                                              acc);
 
     return success();
   }
@@ -109,10 +109,7 @@ public:
   }
 };
 
-static bool isMatmulFunctionToWrap(func::FuncOp func) {
-  if (func.getSymName() != "matmul")
-    return false;
-
+static bool isFunctionToWrap(func::FuncOp func) {
   if (func.isPrivate() || func.isDeclaration())
     return false;
 
@@ -120,7 +117,7 @@ static bool isMatmulFunctionToWrap(func::FuncOp func) {
     return false;
 
   FunctionType functionType = func.getFunctionType();
-  if (functionType.getNumInputs() != 2 || functionType.getNumResults() != 1)
+  if (functionType.getNumResults() != 1)
     return false;
 
   if (!isa<MemRefType>(functionType.getResult(0)))
@@ -144,7 +141,7 @@ public:
 
     SmallVector<func::FuncOp> funcsToWrap;
     module.walk([&](func::FuncOp func) {
-      if (isMatmulFunctionToWrap(func))
+      if (isFunctionToWrap(func))
         funcsToWrap.push_back(func);
     });
 
@@ -161,8 +158,8 @@ public:
 
       OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointAfter(func);
-      auto entry = func::FuncOp::create(builder, func.getLoc(), entryName,
-                                        entryType);
+      auto entry =
+          func::FuncOp::create(builder, func.getLoc(), entryName, entryType);
       entry->setAttr("llvm.emit_c_interface", builder.getUnitAttr());
 
       Block *body = entry.addEntryBlock();
@@ -170,13 +167,11 @@ public:
 
       ValueRange originalInputs = body->getArguments().drop_back();
       Value output = body->getArguments().back();
-      auto call = func::CallOp::create(builder, func.getLoc(),
-                                       func.getSymName(),
-                                       functionType.getResults(),
-                                       originalInputs);
+      auto call =
+          func::CallOp::create(builder, func.getLoc(), func.getSymName(),
+                               functionType.getResults(), originalInputs);
 
-      memref::CopyOp::create(builder, func.getLoc(), call.getResult(0),
-                             output);
+      memref::CopyOp::create(builder, func.getLoc(), call.getResult(0), output);
       func::ReturnOp::create(builder, func.getLoc());
     }
   }
@@ -203,16 +198,13 @@ public:
       auto fnType = rewriter.getFunctionType(
           {lhs.getType(), rhs.getType(), acc.getType()}, {});
 
-      fn = func::FuncOp::create(
-          rewriter, op.getLoc(), "systolic_matmul_8x8", fnType);
+      fn = func::FuncOp::create(rewriter, op.getLoc(), "systolic_matmul_8x8",
+                                fnType);
       fn.setPrivate();
     }
 
     rewriter.replaceOpWithNewOp<func::CallOp>(
-        op,
-        "systolic_matmul_8x8",
-        TypeRange{},
-        ValueRange{lhs, rhs, acc});
+        op, "systolic_matmul_8x8", TypeRange{}, ValueRange{lhs, rhs, acc});
 
     return success();
   }
@@ -237,7 +229,7 @@ public:
 // runtime function `symbol`, declaring the private function on first use.
 // Reuse this from per-IP lowering passes so their pattern body stays tiny.
 static void lowerToRuntimeCall(Operation *op, StringRef symbol,
-                              ValueRange operands, PatternRewriter &rewriter) {
+                               ValueRange operands, PatternRewriter &rewriter) {
   ModuleOp module = op->getParentOfType<ModuleOp>();
   if (!module.lookupSymbol<func::FuncOp>(symbol)) {
     OpBuilder::InsertionGuard guard(rewriter);
@@ -249,8 +241,55 @@ static void lowerToRuntimeCall(Operation *op, StringRef symbol,
   rewriter.replaceOpWithNewOp<func::CallOp>(op, symbol, TypeRange{}, operands);
 }
 
-class LowerQAddReluToCall
-    : public OpRewritePattern<standalone::QAddReluOp> {
+static Value castToDynamicStridedMemRef(Value value,
+                                        PatternRewriter &rewriter) {
+  auto sourceType = cast<MemRefType>(value.getType());
+  SmallVector<int64_t> dynamicStrides(sourceType.getRank(),
+                                      ShapedType::kDynamic);
+  auto layout = StridedLayoutAttr::get(rewriter.getContext(),
+                                       ShapedType::kDynamic, dynamicStrides);
+  auto targetType =
+      MemRefType::get(sourceType.getShape(), sourceType.getElementType(),
+                      layout, sourceType.getMemorySpace());
+  return memref::CastOp::create(rewriter, value.getLoc(), targetType, value);
+}
+
+class LowerSystolicU8S8MatmulToCall
+    : public OpRewritePattern<standalone::SystolicU8S8MatmulOp> {
+public:
+  using OpRewritePattern<standalone::SystolicU8S8MatmulOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(standalone::SystolicU8S8MatmulOp op,
+                                PatternRewriter &rewriter) const override {
+    Value lhs = castToDynamicStridedMemRef(op.getLhs(), rewriter);
+    Value rhs = castToDynamicStridedMemRef(op.getRhs(), rewriter);
+    Value acc = castToDynamicStridedMemRef(op.getAcc(), rewriter);
+    Value lhsZeroPoint = arith::ConstantOp::create(rewriter, op.getLoc(),
+                                                   op.getLhsZeroPointAttr());
+
+    lowerToRuntimeCall(op, "systolic_u8s8_matmul_8x8",
+                       ValueRange{lhs, rhs, acc, lhsZeroPoint}, rewriter);
+    return success();
+  }
+};
+
+class LowerSystolicU8S8ToFuncCall
+    : public impl::LowerSystolicU8S8ToFuncCallBase<
+          LowerSystolicU8S8ToFuncCall> {
+public:
+  using impl::LowerSystolicU8S8ToFuncCallBase<
+      LowerSystolicU8S8ToFuncCall>::LowerSystolicU8S8ToFuncCallBase;
+
+  void runOnOperation() final {
+    RewritePatternSet patterns(&getContext());
+    patterns.add<LowerSystolicU8S8MatmulToCall>(&getContext());
+
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
+class LowerQAddReluToCall : public OpRewritePattern<standalone::QAddReluOp> {
 public:
   using OpRewritePattern<standalone::QAddReluOp>::OpRewritePattern;
 
@@ -275,12 +314,12 @@ public:
     Value reluEnable =
         arith::ConstantOp::create(rewriter, loc, op.getReluEnableAttr());
 
-    lowerToRuntimeCall(
-        op, "qadd_relu_8x8",
-        ValueRange{op.getLhs(), op.getRhs(), op.getOut(), lhsMultiplier,
-                   rhsMultiplier, shift, lhsZeroPoint, rhsZeroPoint,
-                   outputZeroPoint, reluEnable},
-        rewriter);
+    lowerToRuntimeCall(op, "qadd_relu_8x8",
+                       ValueRange{op.getLhs(), op.getRhs(), op.getOut(),
+                                  lhsMultiplier, rhsMultiplier, shift,
+                                  lhsZeroPoint, rhsZeroPoint, outputZeroPoint,
+                                  reluEnable},
+                       rewriter);
 
     return success();
   }
@@ -318,19 +357,18 @@ public:
     Value reluEnable =
         arith::ConstantOp::create(rewriter, loc, op.getReluEnableAttr());
 
-    lowerToRuntimeCall(
-        op, "conv_requant_8x8",
-        ValueRange{op.getAcc(), op.getMultiplier(), op.getShift(), op.getOut(),
-                   outputZeroPoint, reluEnable},
-        rewriter);
+    lowerToRuntimeCall(op, "conv_requant_8x8",
+                       ValueRange{op.getAcc(), op.getMultiplier(),
+                                  op.getShift(), op.getOut(), outputZeroPoint,
+                                  reluEnable},
+                       rewriter);
 
     return success();
   }
 };
 
 class LowerConvRequantToFuncCall
-    : public impl::LowerConvRequantToFuncCallBase<
-          LowerConvRequantToFuncCall> {
+    : public impl::LowerConvRequantToFuncCallBase<LowerConvRequantToFuncCall> {
 public:
   using impl::LowerConvRequantToFuncCallBase<
       LowerConvRequantToFuncCall>::LowerConvRequantToFuncCallBase;

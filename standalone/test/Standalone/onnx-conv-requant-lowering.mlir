@@ -152,8 +152,9 @@ module attributes {transform.with_named_sequence} {
 }
 
 // CHECK-LABEL: func.func @lower_conv_requant
-// CHECK: standalone.conv_accumulate
-// CHECK-SAME: input_zero_point = 3 : i32
+// CHECK: linalg.conv_2d_nchw_fchw_q
+// CHECK-SAME: input_cast = #linalg.type_fn<cast_unsigned>
+// CHECK-SAME: weight_cast = #linalg.type_fn<cast_signed>
 // CHECK-SAME: -> tensor<1x8x2x4xi32>
 // CHECK: arith.constant dense<[1073741824, 536870912, 268435456, 134217728, 1073741824, 536870912, 268435456, 134217728]> : tensor<8xi32>
 // CHECK-NEXT: arith.constant dense<31> : tensor<8xi32>
@@ -161,8 +162,9 @@ module attributes {transform.with_named_sequence} {
 // CHECK-SAME: output_zero_point = 7 : i32
 // CHECK-SAME: relu_enable = 1 : i32
 // CHECK-SAME: -> tensor<1x8x2x4xui8>
-// CHECK: standalone.conv_accumulate
-// CHECK-SAME: input_zero_point = 3 : i32
+// CHECK: linalg.conv_2d_nchw_fchw_q
+// CHECK-SAME: input_cast = #linalg.type_fn<cast_unsigned>
+// CHECK-SAME: weight_cast = #linalg.type_fn<cast_signed>
 // CHECK-SAME: -> tensor<1x8x2x4xi32>
 // CHECK: arith.constant dense<[1073741824, 536870912, 268435456, 134217728, 1073741824, 536870912, 268435456, 134217728]> : tensor<8xi32>
 // CHECK-NEXT: arith.constant dense<31> : tensor<8xi32>

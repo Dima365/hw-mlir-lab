@@ -3,6 +3,11 @@ import struct
 
 from cocotb.triggers import FallingEdge, ReadOnly, ReadWrite, RisingEdge
 
+from tests.golden.conv_requant import (
+    conv_requant_element,
+    fixed_point_params,
+)
+
 from .base import IPDriver
 
 N = 8
@@ -17,53 +22,6 @@ def _pack_unsigned(values, width):
     for idx, value in enumerate(values):
         word |= (value & mask) << (idx * width)
     return word
-
-
-def _round_shift_rne(value, shift):
-    """Signed round-to-nearest, ties-to-even division by 2**shift."""
-    if shift == 0:
-        return value
-
-    magnitude = abs(value)
-    quotient, remainder = divmod(magnitude, 1 << shift)
-    half = 1 << (shift - 1)
-    if remainder > half or (remainder == half and quotient & 1):
-        quotient += 1
-    return -quotient if value < 0 else quotient
-
-
-def fixed_point_params(real_multiplier, max_shift=31):
-    """Return the highest-precision signed-i32 multiplier and shift."""
-    if real_multiplier < 0:
-        raise ValueError("real multiplier must be non-negative")
-
-    for shift in range(max_shift, -1, -1):
-        multiplier = round(real_multiplier * (1 << shift))
-        if 0 <= multiplier <= 0x7FFFFFFF:
-            step = 1.0 / (1 << shift)
-            error_bound = 0.5 * step
-            approximation_error = abs(
-                real_multiplier - multiplier * step
-            )
-            if approximation_error > error_bound + 1e-15:
-                raise ArithmeticError(
-                    "fixed-point approximation is invalid"
-                )
-            return multiplier, shift
-    raise ValueError(f"real multiplier {real_multiplier} does not fit signed i32")
-
-
-def conv_requant_element(
-    acc,
-    multiplier,
-    shift,
-    output_zero_point,
-    relu_enable,
-):
-    scaled = _round_shift_rne(acc * multiplier, shift)
-    if relu_enable:
-        scaled = max(scaled, 0)
-    return max(0, min(255, scaled + output_zero_point))
 
 
 class ConvRequantDriver(IPDriver):

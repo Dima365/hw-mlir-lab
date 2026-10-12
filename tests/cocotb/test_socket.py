@@ -108,11 +108,12 @@ async def test_socket(dut):
             magic, opcode, param_bytes, in_bytes, out_bytes = HEADER.unpack(header)
             assert magic == MAGIC, f"bad magic {magic:#x}"
 
-            driver = registry.BY_OPCODE[opcode]
             params = await read_exact(conn, param_bytes)
             data_in = await read_exact(conn, in_bytes)
 
-            result = await driver.handle(dut, params, data_in)
+            result = await registry.handle_request(
+                IP, dut, opcode, params, data_in
+            )
             assert len(result) == out_bytes, (
                 f"driver returned {len(result)} bytes, header expects {out_bytes}"
             )

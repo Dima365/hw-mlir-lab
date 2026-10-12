@@ -31,3 +31,18 @@
     ACC_W: 32
     OUT_W: 8
     SHIFT_W: 6
+
+- name: accelerator
+  module: accelerator_top
+  opcode: 0
+  sources:
+    - ip/resnet_block_demo/accelerator_top.sv
+    - ip/systolic_array_demo/array.sv
+    - ip/conv_requant_demo/conv_requant.sv
+    - ip/qadd_relu_demo/qadd_relu.sv
+  params:
+    N: 8
+    DATA_W: 8
+    ACC_W: 32
+    PARAM_W: 32
+    SHIFT_W: 6

@@ -64,6 +64,7 @@ mkdir -p "$OBJECT_DIR"
 
 "$LLC" \
   -filetype=obj \
+  -relocation-model=pic \
   "$LLVM_IR" \
   -o "$OBJECT_DIR/mlir_program.o"
 

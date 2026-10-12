@@ -4,11 +4,11 @@ module attributes {transform.with_named_sequence} {
       : (!transform.any_op) -> !transform.any_op
 
     %padded, %pad, %copy_back = transform.structured.pad %matmuls
-      pad_to_multiple_of [8, 8, 8] {
+      pad_to_multiple_of [8, 8, 8] <{
         padding_values = [0 : i8, 0 : i8, 0 : i32],
         padding_dimensions = [0, 1, 2],
         nofold_flags = [1, 1, 0]
-      } : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op)
+      }> : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op)
 
     transform.yield
   }

@@ -1,6 +1,7 @@
 FROM ubuntu:24.04 AS llvm-build
 
-ARG LLVM_COMMIT=8a688983ab0b5aa3ac3cfbcd94d3727d023a169e
+ARG LLVM_REPOSITORY=https://github.com/Dima365/llvm-project.git
+ARG LLVM_COMMIT=bc11b5680d41ea81de5822568166a470f1ea26bf
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -14,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev \
   && rm -rf /var/lib/apt/lists/*
 
-RUN git clone https://github.com/llvm/llvm-project.git /src/llvm-project \
+RUN git clone "$LLVM_REPOSITORY" /src/llvm-project \
   && cd /src/llvm-project \
   && git checkout "$LLVM_COMMIT"
 

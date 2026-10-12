@@ -12,6 +12,7 @@
 #include "Standalone/StandaloneOps.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/Dialect/Transform/Utils/Utils.h"
@@ -920,30 +921,72 @@ static Value createI32TensorConstant(TransformRewriter &rewriter, Location loc,
   return arith::ConstantOp::create(rewriter, loc, type, value);
 }
 
-static Operation *createConvAccumulateOp(TransformRewriter &rewriter,
-                                         const ConvRequantRewrite &rewrite) {
+static Operation *createLinalgConvOp(TransformRewriter &rewriter,
+                                     const ConvRequantRewrite &rewrite) {
   Location loc = rewrite.conv->getLoc();
   rewriter.setInsertionPoint(rewrite.conv);
 
-  OperationState state(loc, standalone::ConvAccumulateOp::getOperationName());
-  state.addOperands({rewrite.accumulate.input, rewrite.accumulate.weight,
-                     rewrite.accumulate.bias});
-  state.addTypes(rewrite.accumulate.resultType);
-  state.addAttribute(
-      "input_zero_point",
-      rewriter.getI32IntegerAttr(rewrite.accumulate.inputZeroPoint));
-  state.addAttribute("strides",
-                     DenseI64ArrayAttr::get(rewriter.getContext(),
-                                            rewrite.accumulate.strides));
-  state.addAttribute("pads", DenseI64ArrayAttr::get(rewriter.getContext(),
-                                                    rewrite.accumulate.pads));
-  state.addAttribute("dilations",
-                     DenseI64ArrayAttr::get(rewriter.getContext(),
-                                            rewrite.accumulate.dilations));
-  state.addAttribute("group",
-                     rewriter.getI64IntegerAttr(rewrite.accumulate.group));
-
-  return rewriter.create(state);
+  const auto &spec = rewrite.accumulate;
+  // Storage is signless in Linalg; the convolution cast attributes define
+  // unsigned activation and signed weight arithmetic, independently of storage.
+  auto signless = [&](Value value, Type elementType) -> Value {
+    auto type = cast<RankedTensorType>(value.getType());
+    auto target = type.clone(elementType);
+    if (type == target)
+      return value;
+    Value empty =
+        tensor::EmptyOp::create(rewriter, loc, type.getShape(), elementType);
+    auto identity = rewriter.getMultiDimIdentityMap(type.getRank());
+    return linalg::GenericOp::create(
+               rewriter, loc, TypeRange{target}, ValueRange{value},
+               ValueRange{empty}, ArrayRef<AffineMap>{identity, identity},
+               SmallVector<utils::IteratorType>(type.getRank(),
+                                                utils::IteratorType::parallel),
+               [&](OpBuilder &b, Location l, ValueRange args) {
+                 Value bits =
+                     UnrealizedConversionCastOp::create(
+                         b, l, TypeRange{elementType}, ValueRange{args[0]})
+                         .getResult(0);
+                 linalg::YieldOp::create(b, l, bits);
+               })
+        .getResult(0);
+  };
+  Value input = signless(spec.input, rewriter.getI8Type());
+  Value weight = signless(spec.weight, rewriter.getI8Type());
+  Value bias = signless(spec.bias, rewriter.getI32Type());
+  Value inputZp =
+      arith::ConstantIntOp::create(rewriter, loc, spec.inputZeroPoint, 32);
+  Value weightZp = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+  Value padValue =
+      arith::ConstantIntOp::create(rewriter, loc, spec.inputZeroPoint, 8);
+  if (llvm::any_of(spec.pads, [](int64_t p) { return p != 0; })) {
+    SmallVector<OpFoldResult> low{rewriter.getIndexAttr(0),
+                                  rewriter.getIndexAttr(0),
+                                  rewriter.getIndexAttr(spec.pads[0]),
+                                  rewriter.getIndexAttr(spec.pads[1])};
+    SmallVector<OpFoldResult> high{rewriter.getIndexAttr(0),
+                                   rewriter.getIndexAttr(0),
+                                   rewriter.getIndexAttr(spec.pads[2]),
+                                   rewriter.getIndexAttr(spec.pads[3])};
+    input = tensor::PadOp::create(rewriter, loc, Type{}, input, low, high,
+                                  padValue, /*nofold=*/false);
+  }
+  auto resultType =
+      spec.resultType.clone(spec.resultType.getShape(), rewriter.getI32Type());
+  Value empty = tensor::EmptyOp::create(rewriter, loc, resultType.getShape(),
+                                        rewriter.getI32Type());
+  Value initial = linalg::BroadcastOp::create(rewriter, loc, bias, empty,
+                                              ArrayRef<int64_t>{0, 2, 3})
+                      .getResult()[0];
+  return linalg::Conv2DNchwFchwQOp::create(
+      rewriter, loc, TypeRange{resultType},
+      ValueRange{input, weight, inputZp, weightZp}, ValueRange{initial},
+      rewriter.getI64TensorAttr(spec.strides),
+      rewriter.getI64TensorAttr(spec.dilations),
+      linalg::TypeFnAttr::get(rewriter.getContext(),
+                              linalg::TypeFn::cast_unsigned),
+      linalg::TypeFnAttr::get(rewriter.getContext(),
+                              linalg::TypeFn::cast_signed));
 }
 
 static Operation *createConvRequantOp(TransformRewriter &rewriter,
@@ -1156,6 +1199,7 @@ public:
 
   void init() {
     declareDependentDialect<arith::ArithDialect>();
+    declareDependentDialect<linalg::LinalgDialect>();
     declareDependentDialect<standalone::StandaloneDialect>();
     declareDependentDialect<tensor::TensorDialect>();
     registerTransformOps<
@@ -1397,7 +1441,7 @@ static LogicalResult lowerONNXConvRequant(
   newAccumulates.reserve(newAccumulates.size() + rewriteCount);
   newRequants.reserve(newRequants.size() + rewriteCount);
   for (const ConvRequantRewrite &rewrite : rewrites) {
-    Operation *accumulate = createConvAccumulateOp(rewriter, rewrite);
+    Operation *accumulate = createLinalgConvOp(rewriter, rewrite);
     Operation *requant = createConvRequantOp(rewriter, rewrite,
                                              accumulate->getResult(0), hasRelu);
 

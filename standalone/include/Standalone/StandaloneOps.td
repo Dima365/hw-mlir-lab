@@ -12,6 +12,7 @@
 include "Standalone/StandaloneTypes.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/IR/CommonTypeConstraints.td"
 include "mlir/IR/CommonAttrConstraints.td"
 
@@ -59,8 +60,42 @@ def Standalone_SystolicMatmulOp
   }];
 }
 
+def Standalone_SystolicU8S8MatmulOp
+    : Standalone_Op<"systolic_u8s8_matmul"> {
+  let summary = "8x8 u8s8 systolic matrix-accumulate";
+  let description = [{
+    Computes one fixed-size matrix-accumulate tile:
+
+    ```
+    acc += (lhs - lhs_zero_point) * rhs
+    ```
+
+    `lhs` contains unsigned activations, `rhs` contains signed weights and
+    `acc` is both the initial and final i32 accumulator. The operation matches
+    the quantized mode of the RTL systolic array.
+    Signless i8 or unsigned ui8 lhs storage is accepted; in both cases its
+    bits are interpreted as uint8. Weight zero point is implicitly zero.
+  }];
+
+  let arguments = (ins
+    Arg<AnyMemRef, "", [MemRead]>:$lhs,
+    Arg<AnyMemRef, "", [MemRead]>:$rhs,
+    Arg<AnyMemRef, "", [MemRead, MemWrite]>:$acc,
+    I32Attr:$lhs_zero_point
+  );
+
+  let assemblyFormat = [{
+    `ins` `(` $lhs `,` $rhs `:` type($lhs) `,` type($rhs) `)`
+    `outs` `(` $acc `:` type($acc) `)`
+    attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
 def Standalone_QAddReluOp
     : Standalone_Op<"qadd_relu", [
+        DestinationStyleOpInterface,
         DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
       ]> {
   let summary = "Quantized residual add with optional ReLU";
@@ -70,10 +105,14 @@ def Standalone_QAddReluOp
     once, optionally clamped by ReLU, and saturated into the output per-tensor
     uint8 domain.
 
-    The tensor form represents an entire static NCHW tensor in high-level IR
+    The tensor form represents a static NCHW tensor or a rank-2 [M, C]
+    matrix (M = batch * height * width) in high-level IR
     and returns the output tensor. The buffer form is the hardware tile
     operation: it accepts two 8x8 input tiles, has no SSA result and writes the
     output memref.
+
+    Tensor TilingInterface supports fixed-size tiles. Pad tails before tiling;
+    the buffer lowering accepts rank-2 tensors only after tiling to 8x8.
   }];
 
   let arguments = (ins
@@ -99,55 +138,15 @@ def Standalone_QAddReluOp
   }];
 
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    ::mlir::MutableOperandRange getDpsInitsMutable() { return getOutMutable(); }
+  }];
 }
 
-def Standalone_ConvAccumulateOp
-    : Standalone_Op<"conv_accumulate", [Pure]> {
-  let summary = "Integer convolution accumulation in NCHW layout";
-  let description = [{
-    Computes an unfused integer convolution accumulator:
-
-    ```
-    acc[n, oc, oh, ow] = bias[oc] +
-      sum(ic, kh, kw) ((input[n, ic, ih, iw] - input_zero_point) *
-                       weight[oc, ic, kh, kw])
-    ```
-
-    The first implementation accepts static rank-4 NCHW uint8 activations,
-    static rank-4 OIHW signed-i8 weights, a rank-1 i32 bias and produces a
-    static rank-4 NCHW i32 tensor. Only `group = 1` is supported. Padding is
-    interpreted using the ONNX `[top, left, bottom, right]` convention; padded
-    activation values equal `input_zero_point` and therefore add zero to the
-    accumulator.
-
-    This is a high-level accelerator operation. It intentionally has no CPU or
-    systolic-array lowering yet.
-  }];
-
-  let arguments = (ins
-    AnyRankedTensor:$input,
-    AnyRankedTensor:$weight,
-    AnyRankedTensor:$bias,
-    I32Attr:$input_zero_point,
-    DenseI64ArrayAttr:$strides,
-    DenseI64ArrayAttr:$pads,
-    DenseI64ArrayAttr:$dilations,
-    I64Attr:$group
-  );
-
-  let results = (outs AnyRankedTensor:$result);
-
-  let assemblyFormat = [{
-    `ins` `(` $input `,` $weight `,` $bias `:`
-      type($input) `,` type($weight) `,` type($bias) `)`
-    attr-dict `->` type($result)
-  }];
-
-  let hasVerifier = 1;
-}
 
 def Standalone_ConvRequantOp
     : Standalone_Op<"conv_requant", [
+        DestinationStyleOpInterface,
         DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
       ]> {
   let summary = "Per-output-channel Conv requantization";
@@ -155,7 +154,11 @@ def Standalone_ConvRequantOp
     Requantizes final i32 Conv accumulators to a per-tensor uint8 activation
     domain.
 
-    The tensor form represents an entire static NCHW tensor in high-level IR.
+    The tensor form represents a static NCHW tensor or a rank-2 [M, C]
+    matrix (M = batch * height * width). Both forms support TilingInterface;
+    multiplier and shift are sliced only along the channel dimension (1).
+    Tensor tiles must have static sizes; pad tails before tiling. The buffer
+    lowering accepts rank-2 tensors only after tiling to 8x8.
     Its rank-1 multiplier and shift tensors contain one fixed-point pair per
     output channel and the operation returns the output tensor.
 
@@ -185,6 +188,9 @@ def Standalone_ConvRequantOp
   }];
 
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    ::mlir::MutableOperandRange getDpsInitsMutable() { return getOutMutable(); }
+  }];
 }
 
 #endif // STANDALONE_OPS

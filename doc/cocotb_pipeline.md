@@ -3,7 +3,7 @@
 This file describes `pipelines/cocotb_pipeline.sh`.
 
 The script runs the compiled app together with the cocotb/Verilator testbench
-for `ip/systolic_array_demo/array.sv`.
+for one IP configuration from `ips.yaml`.
 
 Interface:
 
@@ -13,6 +13,10 @@ Interface:
 
 `ip` selects which IP block to simulate (default `matmul`); its toplevel,
 sources, and parameters come from the manifest `ips.yaml`.
+
+The `accelerator` configuration combines the systolic array, `CONV_REQUANT`,
+and `QADD_RELU` under `ip/resnet_block_demo/accelerator_top.sv`. Cocotb routes
+each request to the selected sub-block using the command opcode.
 
 ## 1. Start Cocotb
 
